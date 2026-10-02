@@ -13,23 +13,22 @@ from .sessions import SessionManager
 
 
 class BrowserManager:
+
     # =========================================================
-    # FIXED DESKTOP CONFIGURATION
+    # FIXED DESKTOP SYSTEM
     # =========================================================
 
-    VIEWPORT_WIDTH = 1536
-    VIEWPORT_HEIGHT = 864
+    VIEWPORT_WIDTH = 1200
+    VIEWPORT_HEIGHT = 675
 
     def __init__(self):
         self.playwright: Playwright | None = None
         self.browser: Browser | None = None
-
         self.contexts: Dict[str, BrowserContext] = {}
-
         self.sessions = SessionManager()
 
     # =========================================================
-    # START CHROMIUM
+    # START BROWSER
     # =========================================================
 
     async def start(self):
@@ -42,31 +41,25 @@ class BrowserManager:
                 "--disable-dev-shm-usage",
                 "--disable-gpu",
                 "--disable-features=Translate",
-                "--window-size=1536,864",
+                "--window-size=1200,675",
             ],
         )
 
     # =========================================================
-    # DESKTOP CONTEXT SETTINGS
+    # FIXED DESKTOP CONTEXT
     # =========================================================
 
     def context_options(self):
         return {
             "viewport": {
-                "width": self.VIEWPORT_WIDTH,
-                "height": self.VIEWPORT_HEIGHT,
+                "width": 1200,
+                "height": 675,
             },
-
             "device_scale_factor": 1,
-
             "is_mobile": False,
-
             "has_touch": False,
-
             "locale": "en-IN",
-
             "timezone_id": "Asia/Kolkata",
-
             "user_agent": (
                 "Mozilla/5.0 "
                 "(X11; Linux x86_64) "
@@ -119,7 +112,7 @@ class BrowserManager:
         return context
 
     # =========================================================
-    # GET ACCOUNT PAGE
+    # GET PAGE
     # =========================================================
 
     async def get_page(
@@ -171,7 +164,6 @@ class BrowserManager:
                 )
 
         except Exception:
-            # Popup may not appear.
             pass
 
     # =========================================================
@@ -187,10 +179,11 @@ class BrowserManager:
             slot_id
         )
 
+        # Force exact desktop viewport.
         await page.set_viewport_size(
             {
-                "width": self.VIEWPORT_WIDTH,
-                "height": self.VIEWPORT_HEIGHT,
+                "width": 1200,
+                "height": 675,
             }
         )
 
@@ -200,14 +193,18 @@ class BrowserManager:
             timeout=60000,
         )
 
+        # Handle:
+        # "Different Location Detected"
         await self.handle_location_popup(
             page
         )
 
+        # Allow Rooter client-side UI to settle.
         await page.wait_for_timeout(
             1500
         )
 
+        # Always start at top.
         await page.evaluate(
             "window.scrollTo(0, 0)"
         )
@@ -215,7 +212,7 @@ class BrowserManager:
         return page
 
     # =========================================================
-    # ENSURE ACCOUNT IS ON PRODUCT PAGE
+    # ENSURE PLAYSTATION PAGE
     # =========================================================
 
     async def ensure_product_page(
@@ -229,8 +226,8 @@ class BrowserManager:
 
         await page.set_viewport_size(
             {
-                "width": self.VIEWPORT_WIDTH,
-                "height": self.VIEWPORT_HEIGHT,
+                "width": 1200,
+                "height": 675,
             }
         )
 
@@ -249,6 +246,7 @@ class BrowserManager:
             page = await self.open_product_page(
                 slot_id
             )
+
         else:
             await self.handle_location_popup(
                 page
@@ -290,7 +288,7 @@ class BrowserManager:
         )
 
     # =========================================================
-    # CLOSE ONE SLOT
+    # CLOSE ONE ACCOUNT
     # =========================================================
 
     async def close_slot(
@@ -328,6 +326,7 @@ class BrowserManager:
     # =========================================================
 
     async def close(self):
+
         for slot_id in list(
             self.contexts.keys()
         ):
@@ -337,10 +336,8 @@ class BrowserManager:
 
         if self.browser is not None:
             await self.browser.close()
-
             self.browser = None
 
         if self.playwright is not None:
             await self.playwright.stop()
-
             self.playwright = None
