@@ -47,10 +47,14 @@ class AccountController:
 
         page = await self.browser.get_page(slot_id)
 
-        screenshot_dir = Path(settings.screenshots_dir)
-        screenshot_dir.mkdir(parents=True, exist_ok=True)
+if not page.url or page.url == "about:blank":
+    await page.goto(
+        settings.product_url,
+        wait_until="domcontentloaded",
+        timeout=60000,
+    )
 
-        path = screenshot_dir / f"{slot_id}.png"
+screenshot_dir = Path(settings.screenshots_dir)
 
         await page.screenshot(
             path=str(path),
