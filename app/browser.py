@@ -63,10 +63,10 @@ class BrowserManager:
 
         context_options = {
             "viewport": {
-                "width": 1536,
-                "height": 864,
+                "width": 1280,
+                "height": 720,
             },
-            "device_scale_factor": 1,
+            "device_scale_factor": 1.2,
             "is_mobile": False,
             "has_touch": False,
         }
