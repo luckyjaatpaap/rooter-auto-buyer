@@ -234,7 +234,7 @@ class AccountController:
         )
 
     # =========================================================
-    # LOGIN HELPERS
+    # FIND MOBILE INPUT
     # =========================================================
 
     async def _find_mobile_input(
@@ -248,10 +248,13 @@ class AccountController:
             'input[name="phone"]',
             'input[name="mobile"]',
             'input[name="phoneNumber"]',
+            'input[autocomplete="tel"]',
             'input[placeholder*="mobile" i]',
             'input[placeholder*="phone" i]',
+            'input[placeholder*="number" i]',
             'input[aria-label*="mobile" i]',
             'input[aria-label*="phone" i]',
+            'input[aria-label*="number" i]',
         ]
 
         for selector in selectors:
@@ -278,12 +281,235 @@ class AccountController:
 
         return None
 
-    async def _find_continue_button(
+    # =========================================================
+    # OPEN LOGIN POPUP
+    # =========================================================
+
+    async def _open_login_popup(
+        self,
+        page,
+    ):
+
+        # -----------------------------------------------------
+        # First: if mobile field is already visible,
+        # login popup is already open.
+        # -----------------------------------------------------
+
+        mobile_input = await self._find_mobile_input(
+            page
+        )
+
+        if mobile_input is not None:
+            return mobile_input
+
+        # -----------------------------------------------------
+        # Known login/profile text
+        # -----------------------------------------------------
+
+        candidates = [
+            page.get_by_text(
+                "Login / Sign Up",
+                exact=True,
+            ),
+            page.get_by_text(
+                "Login",
+                exact=True,
+            ),
+            page.get_by_text(
+                "Sign Up",
+                exact=True,
+            ),
+        ]
+
+        for candidate in candidates:
+
+            try:
+
+                count = await candidate.count()
+
+                for index in range(count):
+
+                    item = candidate.nth(index)
+
+                    if await item.is_visible(
+                        timeout=500
+                    ):
+
+                        await item.click(
+                            timeout=5000
+                        )
+
+                        await page.wait_for_timeout(
+                            1000
+                        )
+
+                        mobile_input = (
+                            await self._find_mobile_input(
+                                page
+                            )
+                        )
+
+                        if mobile_input is not None:
+                            return mobile_input
+
+            except Exception:
+                continue
+
+        # -----------------------------------------------------
+        # Profile/account icon
+        #
+        # Rooter desktop header:
+        # wallet icon -> profile icon
+        #
+        # Try semantic attributes first.
+        # -----------------------------------------------------
+
+        profile_selectors = [
+            '[aria-label*="profile" i]',
+            '[aria-label*="account" i]',
+            '[aria-label*="login" i]',
+            '[title*="profile" i]',
+            '[title*="account" i]',
+            '[title*="login" i]',
+            'img[alt*="profile" i]',
+            'img[alt*="avatar" i]',
+            'img[alt*="account" i]',
+        ]
+
+        for selector in profile_selectors:
+
+            try:
+
+                locator = page.locator(
+                    selector
+                )
+
+                count = await locator.count()
+
+                for index in range(count):
+
+                    item = locator.nth(index)
+
+                    if not await item.is_visible(
+                        timeout=500
+                    ):
+                        continue
+
+                    try:
+
+                        await item.click(
+                            timeout=5000
+                        )
+
+                    except Exception:
+
+                        try:
+
+                            await item.locator(
+                                ".."
+                            ).click(
+                                timeout=3000
+                            )
+
+                        except Exception:
+                            continue
+
+                    await page.wait_for_timeout(
+                        1000
+                    )
+
+                    mobile_input = (
+                        await self._find_mobile_input(
+                            page
+                        )
+                    )
+
+                    if mobile_input is not None:
+                        return mobile_input
+
+            except Exception:
+                continue
+
+        # -----------------------------------------------------
+        # Desktop header fallback
+        #
+        # Profile is the right-side account control,
+        # immediately after the wallet control.
+        # We try header buttons from right to left.
+        # -----------------------------------------------------
+
+        header_controls = page.locator(
+            "header button, "
+            "header [role='button'], "
+            "header a"
+        )
+
+        try:
+
+            count = await header_controls.count()
+
+            for index in range(
+                count - 1,
+                -1,
+                -1,
+            ):
+
+                try:
+
+                    item = header_controls.nth(index)
+
+                    if not await item.is_visible(
+                        timeout=300
+                    ):
+                        continue
+
+                    await item.click(
+                        timeout=3000
+                    )
+
+                    await page.wait_for_timeout(
+                        800
+                    )
+
+                    mobile_input = (
+                        await self._find_mobile_input(
+                            page
+                        )
+                    )
+
+                    if mobile_input is not None:
+                        return mobile_input
+
+                except Exception:
+                    continue
+
+        except Exception:
+            pass
+
+        return None
+
+    # =========================================================
+    # SEND OTP / CONTINUE BUTTON
+    # =========================================================
+
+    async def _find_send_otp_button(
         self,
         page,
     ):
 
         candidates = [
+            page.get_by_role(
+                "button",
+                name="Send OTP",
+                exact=True,
+            ),
+            page.get_by_text(
+                "Send OTP",
+                exact=True,
+            ),
+            page.locator(
+                'button:has-text("Send OTP")'
+            ),
             page.get_by_role(
                 "button",
                 name="Continue",
@@ -311,6 +537,7 @@ class AccountController:
                     if await item.is_visible(
                         timeout=500
                     ):
+
                         return item
 
             except Exception:
@@ -318,18 +545,55 @@ class AccountController:
 
         return None
 
-    async def _find_otp_input(
+    # =========================================================
+    # OTP INPUTS
+    # =========================================================
+
+    async def _find_otp_inputs(
         self,
         page,
     ):
 
+        # First try common OTP selectors.
         selectors = [
             'input[autocomplete="one-time-code"]',
             'input[inputmode="numeric"]',
-            'input[type="tel"]',
-            'input[type="number"]',
             'input[placeholder*="OTP" i]',
             'input[placeholder*="code" i]',
+        ]
+
+        found = []
+
+        for selector in selectors:
+
+            try:
+
+                locator = page.locator(
+                    selector
+                )
+
+                count = await locator.count()
+
+                for index in range(count):
+
+                    item = locator.nth(index)
+
+                    if await item.is_visible(
+                        timeout=300
+                    ):
+
+                        found.append(item)
+
+                if found:
+                    return found
+
+            except Exception:
+                continue
+
+        # Fallback: visible numeric/tel inputs.
+        selectors = [
+            'input[type="tel"]',
+            'input[type="number"]',
         ]
 
         for selector in selectors:
@@ -347,14 +611,22 @@ class AccountController:
                     item = locator.nth(index)
 
                     if await item.is_visible(
-                        timeout=500
+                        timeout=300
                     ):
-                        return item
+
+                        found.append(item)
+
+                if found:
+                    return found
 
             except Exception:
                 continue
 
-        return None
+        return found
+
+    # =========================================================
+    # VERIFY BUTTON
+    # =========================================================
 
     async def _find_verify_button(
         self,
@@ -389,6 +661,7 @@ class AccountController:
                     if await item.is_visible(
                         timeout=500
                     ):
+
                         return item
 
             except Exception:
@@ -456,6 +729,10 @@ class AccountController:
 
         try:
 
+            # -------------------------------------------------
+            # Open target page
+            # -------------------------------------------------
+
             page = await self.browser.open_product_page(
                 slot_id
             )
@@ -468,156 +745,56 @@ class AccountController:
             )
 
             # -------------------------------------------------
-            # Open login popup
+            # PROFILE ICON -> LOGIN POPUP
             # -------------------------------------------------
 
-            login_button = None
-
-            login_candidates = [
-                page.get_by_text(
-                    "Login / Sign Up",
-                    exact=True,
-                ),
-                page.get_by_text(
-                    "Login",
-                    exact=True,
-                ),
-                page.get_by_role(
-                    "button",
-                    name="Login",
-                    exact=True,
-                ),
-            ]
-
-            for candidate in login_candidates:
-
-                try:
-
-                    count = await candidate.count()
-
-                    for index in range(count):
-
-                        item = candidate.nth(index)
-
-                        if await item.is_visible(
-                            timeout=500
-                        ):
-
-                            login_button = item
-                            break
-
-                    if login_button is not None:
-                        break
-
-                except Exception:
-                    continue
-
-            # If login popup is already open,
-            # don't click anything.
-            mobile_input = await self._find_mobile_input(
-                page
+            mobile_input = (
+                await self._open_login_popup(
+                    page
+                )
             )
 
             if mobile_input is None:
 
-                if login_button is None:
-
-                    # Profile/avatar area fallback
-                    clickable = page.locator(
-                        "header button, "
-                        "header [role='button'], "
-                        "header img"
-                    )
-
-                    count = await clickable.count()
-
-                    for index in range(count):
-
-                        try:
-
-                            item = clickable.nth(index)
-
-                            if await item.is_visible(
-                                timeout=300
-                            ):
-
-                                await item.click(
-                                    timeout=3000
-                                )
-
-                                await page.wait_for_timeout(
-                                    1000
-                                )
-
-                                mobile_input = (
-                                    await self._find_mobile_input(
-                                        page
-                                    )
-                                )
-
-                                if mobile_input is not None:
-                                    break
-
-                        except Exception:
-                            continue
-
-                else:
-
-                    await login_button.click(
-                        timeout=5000
-                    )
-
-                    await page.wait_for_timeout(
-                        1000
-                    )
-
-                    mobile_input = (
-                        await self._find_mobile_input(
-                            page
-                        )
-                    )
-
-            # -------------------------------------------------
-            # Mobile input
-            # -------------------------------------------------
-
-            if mobile_input is None:
-
                 raise RuntimeError(
-                    "Rooter mobile-number login "
-                    "field was not found."
+                    "Rooter Login popup could not be opened "
+                    "from the top-right profile icon."
                 )
+
+            # -------------------------------------------------
+            # FILL MOBILE NUMBER
+            # -------------------------------------------------
 
             await mobile_input.fill(
                 phone_number
             )
 
             # -------------------------------------------------
-            # Continue
+            # SEND OTP
             # -------------------------------------------------
 
-            continue_button = (
-                await self._find_continue_button(
+            send_otp_button = (
+                await self._find_send_otp_button(
                     page
                 )
             )
 
-            if continue_button is None:
+            if send_otp_button is None:
 
                 raise RuntimeError(
-                    "Rooter Continue button "
+                    "Rooter Send OTP button "
                     "was not found."
                 )
 
-            await continue_button.click(
+            await send_otp_button.click(
                 timeout=5000
             )
 
             # -------------------------------------------------
-            # Wait for OTP screen
+            # WAIT FOR OTP POPUP
             # -------------------------------------------------
 
-            otp_input = None
+            otp_inputs = []
 
             for _ in range(20):
 
@@ -625,20 +802,20 @@ class AccountController:
                     500
                 )
 
-                otp_input = (
-                    await self._find_otp_input(
+                otp_inputs = (
+                    await self._find_otp_inputs(
                         page
                     )
                 )
 
-                if otp_input is not None:
+                if otp_inputs:
                     break
 
-            if otp_input is None:
+            if not otp_inputs:
 
                 raise RuntimeError(
-                    "OTP screen did not appear "
-                    "after Continue."
+                    "OTP verification popup "
+                    "did not appear."
                 )
 
             account.update(
@@ -650,7 +827,7 @@ class AccountController:
                 "📩 OTP sent successfully.\n\n"
                 f"Slot: {slot_id}\n"
                 f"Number: +91 {phone_number}\n\n"
-                "Ab Telegram me bhejo:\n"
+                "OTP aane ke baad bhejo:\n"
                 f"/otp {slot_id} 123456"
             )
 
@@ -727,42 +904,72 @@ class AccountController:
             )
 
             # -------------------------------------------------
-            # Find OTP field
+            # FIND OTP INPUT(S)
             # -------------------------------------------------
 
-            otp_input = None
+            otp_inputs = []
 
             for _ in range(10):
 
-                otp_input = (
-                    await self._find_otp_input(
+                otp_inputs = (
+                    await self._find_otp_inputs(
                         page
                     )
                 )
 
-                if otp_input is not None:
+                if otp_inputs:
                     break
 
                 await page.wait_for_timeout(
                     500
                 )
 
-            if otp_input is None:
+            if not otp_inputs:
 
                 raise RuntimeError(
                     "OTP input field was not found."
                 )
 
             # -------------------------------------------------
-            # Enter OTP
+            # FILL OTP
+            #
+            # Supports:
+            # 1. One six-digit input
+            # 2. Six separate OTP boxes
             # -------------------------------------------------
 
-            await otp_input.fill(
-                otp
+            if len(otp_inputs) == 1:
+
+                await otp_inputs[0].fill(
+                    otp
+                )
+
+            else:
+
+                # Use first six visible boxes.
+                boxes = otp_inputs[:6]
+
+                if len(boxes) < 6:
+
+                    raise RuntimeError(
+                        "OTP fields were found, "
+                        "but six OTP boxes are not available."
+                    )
+
+                for index, digit in enumerate(
+                    otp
+                ):
+
+                    await boxes[index].fill(
+                        digit
+                    )
+
+            await page.wait_for_timeout(
+                500
             )
 
             # -------------------------------------------------
-            # Verify
+            # VERIFY NOW
             # -------------------------------------------------
 
             verify_button = (
@@ -774,7 +981,8 @@ class AccountController:
             if verify_button is None:
 
                 raise RuntimeError(
-                    "Verify Now button was not found."
+                    "Verify Now button "
+                    "was not found."
                 )
 
             await verify_button.click(
@@ -782,24 +990,22 @@ class AccountController:
             )
 
             # -------------------------------------------------
-            # Wait for successful login
+            # WAIT FOR LOGIN RESULT
             # -------------------------------------------------
 
             await page.wait_for_timeout(
                 3000
             )
 
-            # Remove any location popup
             await self.browser.handle_location_popup(
                 page
             )
 
-            # Make sure we are back on Rooter
-            await self.browser.ensure_product_page(
-                slot_id
-            )
+            # -------------------------------------------------
+            # RETURN TO PRODUCT PAGE
+            # -------------------------------------------------
 
-            page = await self.browser.get_page(
+            page = await self.browser.ensure_product_page(
                 slot_id
             )
 
@@ -808,7 +1014,7 @@ class AccountController:
             )
 
             # -------------------------------------------------
-            # Save authenticated session
+            # SAVE AUTHENTICATED SESSION
             # -------------------------------------------------
 
             await self.browser.save_session(
@@ -823,7 +1029,7 @@ class AccountController:
             )
 
             # -------------------------------------------------
-            # Successful-login screenshot
+            # LOGIN SUCCESS SCREENSHOT
             # -------------------------------------------------
 
             screenshot_path = (
@@ -849,8 +1055,8 @@ class AccountController:
                 caption=(
                     "✅ LOGIN SUCCESSFUL\n\n"
                     f"Slot: {slot_id}\n"
-                    f"Number: +91 {account.phone_number}\n"
-                    f"Page: {page.url}\n\n"
+                    f"Number: +91 "
+                    f"{account.phone_number}\n"
                     "Session saved."
                 ),
             )
@@ -858,7 +1064,8 @@ class AccountController:
             await update.message.reply_text(
                 "✅ Login successful\n\n"
                 f"Slot: {slot_id}\n"
-                f"Number: +91 {account.phone_number}\n"
+                f"Number: +91 "
+                f"{account.phone_number}\n"
                 "Session saved."
             )
 
@@ -940,9 +1147,7 @@ class AccountController:
             )
 
             await self.telegram.send_photo(
-                photo_path=str(
-                    screenshot_path
-                ),
+                photo_path=str(screenshot_path),
                 caption=(
                     f"🖥️ {slot_id}\n"
                     f"Page: {page.url}"
@@ -1163,9 +1368,7 @@ class AccountController:
             )
 
             await self.telegram.send_photo(
-                photo_path=str(
-                    screenshot_path
-                ),
+                photo_path=str(screenshot_path),
                 caption=(
                     "⚠️ RECOVERY\n"
                     f"Slot: {slot_id}\n\n"
