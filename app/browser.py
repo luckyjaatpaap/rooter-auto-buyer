@@ -45,11 +45,11 @@ class BrowserManager:
         if storage_file.exists():
             context = await self.browser.new_context(
                 storage_state=str(storage_file),
-                viewport={"width": 1365, "height": 768},
+                viewport={"width": 1920, "height": 1080},
             )
         else:
             context = await self.browser.new_context(
-                viewport={"width": 1365, "height": 768},
+                viewport={"width": 1920, "height": 1080},
             )
 
         self.contexts[slot_id] = context
@@ -65,6 +65,36 @@ class BrowserManager:
             return pages[0]
 
         return await context.new_page()
+            async def handle_location_popup(self, page):
+        try:
+            button = page.get_by_text(
+                "No, stay on this site",
+                exact=True,
+            )
+
+            if await button.count() > 0:
+                if await button.first.is_visible():
+                    await button.first.click(
+                        timeout=5000
+                    )
+
+                    await page.wait_for_timeout(1000)
+
+        except Exception:
+            pass
+
+    async def open_product_page(self, slot_id: str):
+        page = await self.get_page(slot_id)
+
+        await page.goto(
+            settings.product_url,
+            wait_until="domcontentloaded",
+            timeout=60000,
+        )
+
+        await self.handle_location_popup(page)
+
+        return page
 
     async def save_session(self, slot_id: str):
         context = self.contexts.get(slot_id)
@@ -92,7 +122,7 @@ class BrowserManager:
     async def close(self):
         for slot_id in list(self.contexts.keys()):
             await self.close_slot(slot_id)
-
+        
         if self.browser is not None:
             await self.browser.close()
             self.browser = None
