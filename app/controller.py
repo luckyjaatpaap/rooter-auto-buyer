@@ -140,3 +140,43 @@ class AccountController:
     f"OTP aane ke baad:\n"
     f"/otp {slot_id} 123456"
         )
+    def connect_commands(self):
+        self.telegram.register_command(
+            "start",
+            self.handle_start,
+        )
+
+        self.telegram.register_command(
+            "status",
+            self.handle_status,
+        )
+
+        self.telegram.register_command(
+            "login",
+            self.handle_login,
+        )
+
+        self.telegram.register_command(
+            "otp",
+            self.handle_otp,
+        )
+
+        self.telegram.register_command(
+            "logout",
+            self.handle_logout,
+        )
+
+        self.telegram.register_command(
+            "screen",
+            self.handle_screen,
+        )
+
+        self.telegram.register_command(
+            "refresh",
+            self.handle_refresh,
+        )
+
+        self.telegram.register_command(
+            "help",
+            self.handle_help,
+    )
