@@ -15,7 +15,7 @@ from .sessions import SessionManager
 class BrowserManager:
 
     # =========================================================
-    # REAL DESKTOP WINDOW — DO NOT CHANGE
+    # REAL DESKTOP WINDOW
     # =========================================================
 
     WINDOW_WIDTH = 1200
@@ -115,98 +115,144 @@ class BrowserManager:
 
         return await context.new_page()
 
+    # =========================================================
+    # ROOTER LOCATION POPUP
+    # =========================================================
+
     async def handle_location_popup(
         self,
         page: Page,
-    ):
-        """
-        Safely handles Rooter location popup.
-
-        This function does not modify viewport, browser,
-        page layout, or any other automation settings.
-        """
+    ) -> bool:
 
         try:
 
-            # Known Rooter button
-            button = page.get_by_text(
+            # Give Rooter a moment to render the popup.
+            await page.wait_for_timeout(800)
+
+            # -------------------------------------------------
+            # Exact Rooter option
+            # -------------------------------------------------
+
+            locator = page.get_by_text(
                 "No, stay on this site",
                 exact=True,
             )
 
-            if await button.count() > 0:
+            count = await locator.count()
+
+            for index in range(count):
 
                 try:
 
-                    button = button.first
+                    element = locator.nth(index)
 
-                    if await button.is_visible(
-                        timeout=1500
+                    if await element.is_visible(
+                        timeout=1000
                     ):
 
-                        await button.click(
-                            timeout=3000
+                        await element.click(
+                            timeout=5000
                         )
 
                         await page.wait_for_timeout(
-                            500
+                            1000
                         )
 
-                        return
+                        return True
 
                 except Exception:
-                    pass
+                    continue
 
-            # Fallback only if the exact text changed slightly
-            try:
+            # -------------------------------------------------
+            # Button containing the exact option
+            # -------------------------------------------------
 
-                buttons = page.locator(
-                    "button"
-                )
+            buttons = page.locator(
+                "button"
+            )
 
-                count = await buttons.count()
+            button_count = await buttons.count()
 
-                for i in range(count):
+            for index in range(button_count):
 
-                    try:
+                try:
 
-                        current = buttons.nth(i)
+                    button = buttons.nth(index)
 
-                        if not await current.is_visible(
-                            timeout=300
-                        ):
-                            continue
-
-                        text = (
-                            await current.inner_text(
-                                timeout=500
-                            )
-                        ).strip().lower()
-
-                        if (
-                            "stay on this site"
-                            in text
-                        ):
-
-                            await current.click(
-                                timeout=3000
-                            )
-
-                            await page.wait_for_timeout(
-                                500
-                            )
-
-                            return
-
-                    except Exception:
+                    if not await button.is_visible(
+                        timeout=500
+                    ):
                         continue
 
-            except Exception:
-                pass
+                    text = (
+                        await button.inner_text(
+                            timeout=1000
+                        )
+                    )
+
+                    text = " ".join(
+                        text.split()
+                    ).strip().lower()
+
+                    if text == (
+                        "no, stay on this site"
+                    ):
+
+                        await button.click(
+                            timeout=5000
+                        )
+
+                        await page.wait_for_timeout(
+                            1000
+                        )
+
+                        return True
+
+                except Exception:
+                    continue
+
+            # -------------------------------------------------
+            # Generic clickable element fallback
+            # -------------------------------------------------
+
+            locator = page.locator(
+                "text=No, stay on this site"
+            )
+
+            count = await locator.count()
+
+            for index in range(count):
+
+                try:
+
+                    element = locator.nth(index)
+
+                    if await element.is_visible(
+                        timeout=500
+                    ):
+
+                        await element.click(
+                            timeout=5000
+                        )
+
+                        await page.wait_for_timeout(
+                            1000
+                        )
+
+                        return True
+
+                except Exception:
+                    continue
+
+            return False
 
         except Exception:
-            # Popup handling must NEVER crash browser flow.
-            pass
+            # Popup handling must never crash the browser.
+            return False
+
+    # =========================================================
+    # OPEN PLAYSTATION PRODUCT
+    # =========================================================
 
     async def open_product_page(
         self,
@@ -223,6 +269,7 @@ class BrowserManager:
             timeout=60000,
         )
 
+        # Handle Rooter location popup
         await self.handle_location_popup(
             page
         )
@@ -236,6 +283,10 @@ class BrowserManager:
         )
 
         return page
+
+    # =========================================================
+    # ENSURE PLAYSTATION PAGE
+    # =========================================================
 
     async def ensure_product_page(
         self,
@@ -265,6 +316,8 @@ class BrowserManager:
 
         else:
 
+            # Handle popup even when already
+            # on the product page.
             await self.handle_location_popup(
                 page
             )
@@ -274,6 +327,10 @@ class BrowserManager:
             )
 
         return page
+
+    # =========================================================
+    # SAVE SESSION
+    # =========================================================
 
     async def save_session(
         self,
@@ -301,6 +358,10 @@ class BrowserManager:
             path=str(storage_file)
         )
 
+    # =========================================================
+    # CLOSE SLOT
+    # =========================================================
+
     async def close_slot(
         self,
         slot_id: str,
@@ -316,6 +377,10 @@ class BrowserManager:
 
         await context.close()
 
+    # =========================================================
+    # LOGOUT + CLEAR SESSION
+    # =========================================================
+
     async def logout_slot(
         self,
         slot_id: str,
@@ -328,6 +393,10 @@ class BrowserManager:
         self.sessions.delete_session(
             slot_id
         )
+
+    # =========================================================
+    # CLOSE EVERYTHING
+    # =========================================================
 
     async def close(self):
 
