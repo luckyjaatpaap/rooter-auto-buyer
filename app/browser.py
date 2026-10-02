@@ -4,6 +4,7 @@ from typing import Dict
 from playwright.async_api import (
     Browser,
     BrowserContext,
+    Page,
     Playwright,
     async_playwright,
 )
@@ -13,9 +14,26 @@ from .sessions import SessionManager
 
 
 class BrowserManager:
+    # Target rendered screenshot:
+    # 1536 x 864
+    #
+    # Website CSS viewport:
+    # 1280 x 720
+    #
+    # Device scale factor:
+    # 1.2
+    #
+    # 1280 * 1.2 = 1536
+    # 720 * 1.2 = 864
+
+    VIEWPORT_WIDTH = 1280
+    VIEWPORT_HEIGHT = 720
+    DEVICE_SCALE_FACTOR = 1.2
+
     def __init__(self):
         self.playwright: Playwright | None = None
         self.browser: Browser | None = None
+
         self.contexts: Dict[str, BrowserContext] = {}
 
         self.sessions = SessionManager()
@@ -33,8 +51,26 @@ class BrowserManager:
                 "--no-sandbox",
                 "--disable-dev-shm-usage",
                 "--disable-gpu",
+                "--disable-features=Translate",
             ],
         )
+
+    # ---------------------------------------------------------
+    # CONTEXT SETTINGS
+    # ---------------------------------------------------------
+
+    def context_options(self):
+        return {
+            "viewport": {
+                "width": self.VIEWPORT_WIDTH,
+                "height": self.VIEWPORT_HEIGHT,
+            },
+            "device_scale_factor": self.DEVICE_SCALE_FACTOR,
+            "is_mobile": False,
+            "has_touch": False,
+            "locale": "en-IN",
+            "timezone_id": "Asia/Kolkata",
+        }
 
     # ---------------------------------------------------------
     # GET / CREATE ACCOUNT CONTEXT
@@ -61,24 +97,16 @@ class BrowserManager:
             session_dir / "storage_state.json"
         )
 
-        context_options = {
-            "viewport": {
-                "width": 1280,
-                "height": 720,
-            },
-            "device_scale_factor": 1.2,
-            "is_mobile": False,
-            "has_touch": False,
-        }
+        options = self.context_options()
 
         if storage_file.exists():
             context = await self.browser.new_context(
                 storage_state=str(storage_file),
-                **context_options,
+                **options,
             )
         else:
             context = await self.browser.new_context(
-                **context_options,
+                **options,
             )
 
         self.contexts[slot_id] = context
@@ -86,13 +114,14 @@ class BrowserManager:
         return context
 
     # ---------------------------------------------------------
-    # GET PAGE
+    # GET ACCOUNT PAGE
     # ---------------------------------------------------------
 
     async def get_page(
         self,
         slot_id: str,
-    ):
+    ) -> Page:
+
         context = await self.get_context(
             slot_id
         )
@@ -105,12 +134,12 @@ class BrowserManager:
         return await context.new_page()
 
     # ---------------------------------------------------------
-    # LOCATION POPUP
+    # HANDLE LOCATION POPUP
     # ---------------------------------------------------------
 
     async def handle_location_popup(
         self,
-        page,
+        page: Page,
     ):
         try:
             button = page.get_by_text(
@@ -118,28 +147,36 @@ class BrowserManager:
                 exact=True,
             )
 
-            if await button.count() > 0:
-                if await button.first.is_visible():
-                    await button.first.click(
-                        timeout=5000
-                    )
+            if await button.count() == 0:
+                return
 
-                    await page.wait_for_timeout(
-                        1000
-                    )
+            first_button = button.first
+
+            if await first_button.is_visible(
+                timeout=3000
+            ):
+                await first_button.click(
+                    timeout=5000
+                )
+
+                await page.wait_for_timeout(
+                    1000
+                )
 
         except Exception:
-            # Popup may not appear.
+            # Popup is optional.
+            # If it does not appear, continue normally.
             pass
 
     # ---------------------------------------------------------
-    # OPEN PLAYSTATION PRODUCT PAGE
+    # OPEN ROOTER PLAYSTATION PAGE
     # ---------------------------------------------------------
 
     async def open_product_page(
         self,
         slot_id: str,
-    ):
+    ) -> Page:
+
         page = await self.get_page(
             slot_id
         )
@@ -150,92 +187,32 @@ class BrowserManager:
             timeout=60000,
         )
 
+        # Rooter location popup handling.
         await self.handle_location_popup(
             page
+        )
+
+        # Give the page a moment to finish
+        # its client-side layout.
+        await page.wait_for_timeout(
+            1500
+        )
+
+        # Always start from the top.
+        await page.evaluate(
+            "window.scrollTo(0, 0)"
         )
 
         return page
 
     # ---------------------------------------------------------
-    # SAVE SESSION
+    # ENSURE PRODUCT PAGE
     # ---------------------------------------------------------
 
-    async def save_session(
+    async def ensure_product_page(
         self,
         slot_id: str,
-    ):
-        context = self.contexts.get(
-            slot_id
-        )
+    ) -> Page:
 
-        if context is None:
-            return
-
-        session_dir = (
-            self.sessions.session_path(
-                slot_id
-            )
-        )
-
-        storage_file = (
-            session_dir
-            / "storage_state.json"
-        )
-
-        await context.storage_state(
-            path=str(storage_file)
-        )
-
-    # ---------------------------------------------------------
-    # CLOSE ACCOUNT SLOT
-    # ---------------------------------------------------------
-
-    async def close_slot(
-        self,
-        slot_id: str,
-    ):
-        context = self.contexts.pop(
-            slot_id,
-            None,
-        )
-
-        if context is None:
-            return
-
-        await context.close()
-
-    # ---------------------------------------------------------
-    # LOGOUT / DELETE SESSION
-    # ---------------------------------------------------------
-
-    async def logout_slot(
-        self,
-        slot_id: str,
-    ):
-        await self.close_slot(
-            slot_id
-        )
-
-        self.sessions.delete_session(
-            slot_id
-        )
-
-    # ---------------------------------------------------------
-    # CLOSE EVERYTHING
-    # ---------------------------------------------------------
-
-    async def close(self):
-        for slot_id in list(
-            self.contexts.keys()
-        ):
-            await self.close_slot(
-                slot_id
-            )
-
-        if self.browser is not None:
-            await self.browser.close()
-            self.browser = None
-
-        if self.playwright is not None:
-            await self.playwright.stop()
-            self.playwright = None
+        page = await self.get_page(
+            slot
