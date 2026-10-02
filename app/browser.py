@@ -153,38 +153,136 @@ class BrowserManager:
     # =========================================================
 
     async def handle_location_popup(
-        self,
-        page: Page,
-    ):
+    self,
+    page: Page,
+):
+    """
+    Smartly handles Rooter's location-detected popup.
 
+    It tries multiple safe ways to dismiss the popup without
+    changing the page layout, viewport, or other browser settings.
+    """
+
+    try:
+        # Give popup a short moment to appear
+        await page.wait_for_timeout(500)
+
+        # 1. Exact known button
+        selectors = [
+            'text="No, stay on this site"',
+            'button:has-text("No, stay on this site")',
+            'text="Stay on this site"',
+            'button:has-text("Stay on this site")',
+        ]
+
+        for selector in selectors:
+
+            try:
+                locator = page.locator(selector)
+
+                count = await locator.count()
+
+                if count == 0:
+                    continue
+
+                for i in range(count):
+
+                    button = locator.nth(i)
+
+                    try:
+                        if await button.is_visible(
+                            timeout=1000
+                        ):
+                            await button.click(
+                                timeout=3000
+                            )
+
+                            await page.wait_for_timeout(
+                                500
+                            )
+
+                            return
+
+                    except Exception:
+                        continue
+
+            except Exception:
+                continue
+
+        # 2. If popup has an accessible button name
         try:
-
-            button = page.get_by_text(
-                "No, stay on this site",
+            button = page.get_by_role(
+                "button",
+                name="No, stay on this site",
                 exact=True,
             )
 
-            if await button.count() == 0:
-                return
+            if await button.count() > 0:
+                if await button.first.is_visible(
+                    timeout=1000
+                ):
+                    await button.first.click(
+                        timeout=3000
+                    )
 
-            button = button.first
+                    await page.wait_for_timeout(
+                        500
+                    )
 
-            if await button.is_visible(
-                timeout=3000
-            ):
-
-                await button.click(
-                    timeout=5000
-                )
-
-                await page.wait_for_timeout(
-                    1000
-                )
+                    return
 
         except Exception:
-
-            # Popup is optional.
             pass
+
+        # 3. Final smart fallback:
+        # Search visible buttons containing "stay"
+        try:
+            buttons = page.locator("button")
+
+            count = await buttons.count()
+
+            for i in range(count):
+
+                button = buttons.nth(i)
+
+                try:
+                    if not await button.is_visible(
+                        timeout=500
+                    ):
+                        continue
+
+                    text = (
+                        await button.inner_text(
+                            timeout=1000
+                        )
+                    ).strip().lower()
+
+                    if (
+                        "stay on this site" in text
+                        or (
+                            "stay" in text
+                            and "site" in text
+                        )
+                    ):
+                        await button.click(
+                            timeout=3000
+                        )
+
+                        await page.wait_for_timeout(
+                            500
+                        )
+
+                        return
+
+                except Exception:
+                    continue
+
+        except Exception:
+            pass
+
+    except Exception:
+        # Popup handling must never break the main flow.
+        pass
 
     # =========================================================
     # OPEN PLAYSTATION PAGE
