@@ -134,7 +134,9 @@ class AccountController:
         self.pending_logins[slot_id] = phone_number
 
         await self.telegram.send_message(
-            f"🔐 Login started\n"
-            f"Slot: {slot_id}\n"
-            f"Number: {phone_number}\n\n"
-            f"OTP aane ke baad
+    f"🔐 Login started\n"
+    f"Slot: {slot_id}\n"
+    f"Number: {phone_number}\n\n"
+    f"OTP aane ke baad:\n"
+    f"/otp {slot_id} 123456"
+        )
