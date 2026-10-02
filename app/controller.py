@@ -24,6 +24,7 @@ class AccountController:
         for service in range(1, settings.services + 1):
             for account in range(1, settings.accounts_per_service + 1):
                 slot_id = f"S{service}-A{account}"
+
                 self.accounts[slot_id] = AccountState(
                     slot_id=slot_id
                 )
@@ -92,7 +93,7 @@ class AccountController:
     ):
         lines = [
             "📊 Account Status",
-            ""
+            "",
         ]
 
         for account in self.all_accounts():
@@ -136,17 +137,17 @@ class AccountController:
 
         try:
             account = self.get_account(slot_id)
+
         except ValueError as exc:
-            await self._send(update, f"❌ {exc}")
+            await self._send(
+                update,
+                f"❌ {exc}",
+            )
             return
 
         try:
-            page = await self.browser.get_page(slot_id)
-
-            await page.goto(
-                settings.product_url,
-                wait_until="domcontentloaded",
-                timeout=60000,
+            page = await self.browser.open_product_page(
+                slot_id
             )
 
             account.update(
@@ -198,29 +199,38 @@ class AccountController:
 
         try:
             account = self.get_account(slot_id)
+
         except ValueError as exc:
-            await self._send(update, f"❌ {exc}")
+            await self._send(
+                update,
+                f"❌ {exc}",
+            )
             return
 
         if len(otp) != 6 or not otp.isdigit():
             await self._send(
                 update,
-                "❌ OTP must be exactly 6 digits."
+                "❌ OTP must be exactly 6 digits.",
             )
             return
 
         try:
-            page = await self.browser.get_page(slot_id)
+            page = await self.browser.get_page(
+                slot_id
+            )
 
             account.update(
                 current_page=page.url,
                 last_error=None,
             )
 
-            # OTP interaction will be added after
-            # the Rooter login DOM/selectors are verified.
+            # Actual OTP interaction will be added
+            # after Rooter's login DOM/selectors
+            # are verified.
 
-            await self.browser.save_session(slot_id)
+            await self.browser.save_session(
+                slot_id
+            )
 
             screenshot_path = await self.take_screenshot(
                 slot_id
@@ -267,7 +277,7 @@ class AccountController:
         if len(args) < 1:
             await self._send(
                 update,
-                "❌ Format:\n/logout S1-A1"
+                "❌ Format:\n/logout S1-A1",
             )
             return
 
@@ -275,12 +285,18 @@ class AccountController:
 
         try:
             account = self.get_account(slot_id)
+
         except ValueError as exc:
-            await self._send(update, f"❌ {exc}")
+            await self._send(
+                update,
+                f"❌ {exc}",
+            )
             return
 
         try:
-            await self.browser.logout_slot(slot_id)
+            await self.browser.logout_slot(
+                slot_id
+            )
 
             account.update(
                 phone_number=None,
@@ -306,7 +322,7 @@ class AccountController:
         except Exception as exc:
             await self._send(
                 update,
-                f"❌ Logout error: {exc}"
+                f"❌ Logout error: {exc}",
             )
 
     # ---------------------------------------------------------
@@ -323,7 +339,7 @@ class AccountController:
         if len(args) < 1:
             await self._send(
                 update,
-                "❌ Format:\n/screen S1-A1"
+                "❌ Format:\n/screen S1-A1",
             )
             return
 
@@ -331,8 +347,12 @@ class AccountController:
 
         try:
             self.get_account(slot_id)
+
         except ValueError as exc:
-            await self._send(update, f"❌ {exc}")
+            await self._send(
+                update,
+                f"❌ {exc}",
+            )
             return
 
         try:
@@ -342,13 +362,15 @@ class AccountController:
 
             await self.telegram.send_photo(
                 screenshot_path,
-                caption=f"📸 Current screen — {slot_id}",
+                caption=(
+                    f"📸 Current screen — {slot_id}"
+                ),
             )
 
         except Exception as exc:
             await self._send(
                 update,
-                f"❌ Screenshot error: {exc}"
+                f"❌ Screenshot error: {exc}",
             )
 
     # ---------------------------------------------------------
@@ -365,7 +387,7 @@ class AccountController:
         if len(args) < 1:
             await self._send(
                 update,
-                "❌ Format:\n/refresh S1-A1"
+                "❌ Format:\n/refresh S1-A1",
             )
             return
 
@@ -373,12 +395,9 @@ class AccountController:
 
         try:
             account = self.get_account(slot_id)
-            page = await self.browser.get_page(slot_id)
 
-            await page.goto(
-                settings.product_url,
-                wait_until="domcontentloaded",
-                timeout=60000,
+            page = await self.browser.open_product_page(
+                slot_id
             )
 
             account.update(
@@ -435,13 +454,13 @@ class AccountController:
     ) -> str:
         account = self.get_account(slot_id)
 
-        page = await self.browser.get_page(slot_id)
+        page = await self.browser.get_page(
+            slot_id
+        )
 
         if not page.url or page.url == "about:blank":
-            await page.goto(
-                settings.product_url,
-                wait_until="domcontentloaded",
-                timeout=60000,
+            page = await self.browser.open_product_page(
+                slot_id
             )
 
         screenshot_dir = Path(
@@ -482,7 +501,9 @@ class AccountController:
         error: str,
     ):
         try:
-            account = self.get_account(slot_id)
+            account = self.get_account(
+                slot_id
+            )
 
             account.update(
                 last_error=error,
@@ -494,6 +515,7 @@ class AccountController:
                 screenshot_path = await self.take_screenshot(
                     slot_id
                 )
+
             except Exception:
                 pass
 
@@ -515,17 +537,12 @@ class AccountController:
                             f"{slot_id}"
                         ),
                     )
+
                 except Exception:
                     pass
 
-            page = await self.browser.get_page(
+            page = await self.browser.open_product_page(
                 slot_id
-            )
-
-            await page.goto(
-                settings.product_url,
-                wait_until="domcontentloaded",
-                timeout=60000,
             )
 
             account.update(
@@ -537,7 +554,7 @@ class AccountController:
                 (
                     "♻️ Recovery successful\n"
                     f"Slot: {slot_id}\n"
-                    f"Returned to PlayStation page."
+                    "Returned to PlayStation page."
                 )
             )
 
@@ -550,6 +567,7 @@ class AccountController:
                         f"{recovery_error}"
                     )
                 )
+
             except Exception:
                 pass
 
@@ -596,4 +614,4 @@ class AccountController:
         self.telegram.register_command(
             "help",
             self.handle_help,
-    )
+        )
