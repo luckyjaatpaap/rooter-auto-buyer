@@ -15,7 +15,7 @@ from .sessions import SessionManager
 class BrowserManager:
 
     # =========================================================
-    # REAL DESKTOP WINDOW
+    # REAL DESKTOP WINDOW — DO NOT CHANGE
     # =========================================================
 
     WINDOW_WIDTH = 1200
@@ -29,10 +29,6 @@ class BrowserManager:
 
         self.sessions = SessionManager()
 
-    # =========================================================
-    # START REAL DESKTOP CHROMIUM
-    # =========================================================
-
     async def start(self):
 
         self.playwright = await async_playwright().start()
@@ -43,50 +39,25 @@ class BrowserManager:
                 "--no-sandbox",
                 "--disable-dev-shm-usage",
                 "--disable-gpu",
-
-                # Real desktop window size
                 "--window-size=1200,675",
-
-                # Prevent Chromium from applying
-                # automatic scaling.
                 "--force-device-scale-factor=1",
-
                 "--disable-features=Translate",
             ],
         )
 
-    # =========================================================
-    # DESKTOP CONTEXT
-    # =========================================================
-
     def context_options(self):
 
         return {
-            # IMPORTANT:
-            # Do NOT use a fixed Playwright viewport.
-            #
-            # This lets Chromium behave like a real
-            # desktop browser window.
-
             "viewport": None,
-
             "screen": {
                 "width": self.WINDOW_WIDTH,
                 "height": self.WINDOW_HEIGHT,
             },
-
             "is_mobile": False,
-
             "has_touch": False,
-
             "locale": "en-IN",
-
             "timezone_id": "Asia/Kolkata",
         }
-
-    # =========================================================
-    # GET / CREATE ACCOUNT CONTEXT
-    # =========================================================
 
     async def get_context(
         self,
@@ -128,10 +99,6 @@ class BrowserManager:
 
         return context
 
-    # =========================================================
-    # GET ACCOUNT PAGE
-    # =========================================================
-
     async def get_page(
         self,
         slot_id: str,
@@ -148,52 +115,80 @@ class BrowserManager:
 
         return await context.new_page()
 
-    # =========================================================
-    # LOCATION POPUP
-    # =========================================================
-
     async def handle_location_popup(
-    self,
-    page: Page,
-):
-    """
-    Smartly handles Rooter's location-detected popup.
+        self,
+        page: Page,
+    ):
+        """
+        Safely handles Rooter location popup.
 
-    It tries multiple safe ways to dismiss the popup without
-    changing the page layout, viewport, or other browser settings.
-    """
+        This function does not modify viewport, browser,
+        page layout, or any other automation settings.
+        """
 
-    try:
-        # Give popup a short moment to appear
-        await page.wait_for_timeout(500)
+        try:
 
-        # 1. Exact known button
-        selectors = [
-            'text="No, stay on this site"',
-            'button:has-text("No, stay on this site")',
-            'text="Stay on this site"',
-            'button:has-text("Stay on this site")',
-        ]
+            # Known Rooter button
+            button = page.get_by_text(
+                "No, stay on this site",
+                exact=True,
+            )
 
-        for selector in selectors:
+            if await button.count() > 0:
 
+                try:
+
+                    button = button.first
+
+                    if await button.is_visible(
+                        timeout=1500
+                    ):
+
+                        await button.click(
+                            timeout=3000
+                        )
+
+                        await page.wait_for_timeout(
+                            500
+                        )
+
+                        return
+
+                except Exception:
+                    pass
+
+            # Fallback only if the exact text changed slightly
             try:
-                locator = page.locator(selector)
 
-                count = await locator.count()
+                buttons = page.locator(
+                    "button"
+                )
 
-                if count == 0:
-                    continue
+                count = await buttons.count()
 
                 for i in range(count):
 
-                    button = locator.nth(i)
-
                     try:
-                        if await button.is_visible(
-                            timeout=1000
+
+                        current = buttons.nth(i)
+
+                        if not await current.is_visible(
+                            timeout=300
                         ):
-                            await button.click(
+                            continue
+
+                        text = (
+                            await current.inner_text(
+                                timeout=500
+                            )
+                        ).strip().lower()
+
+                        if (
+                            "stay on this site"
+                            in text
+                        ):
+
+                            await current.click(
                                 timeout=3000
                             )
 
@@ -207,86 +202,11 @@ class BrowserManager:
                         continue
 
             except Exception:
-                continue
-
-        # 2. If popup has an accessible button name
-        try:
-            button = page.get_by_role(
-                "button",
-                name="No, stay on this site",
-                exact=True,
-            )
-
-            if await button.count() > 0:
-                if await button.first.is_visible(
-                    timeout=1000
-                ):
-                    await button.first.click(
-                        timeout=3000
-                    )
-
-                    await page.wait_for_timeout(
-                        500
-                    )
-
-                    return
+                pass
 
         except Exception:
+            # Popup handling must NEVER crash browser flow.
             pass
-
-        # 3. Final smart fallback:
-        # Search visible buttons containing "stay"
-        try:
-            buttons = page.locator("button")
-
-            count = await buttons.count()
-
-            for i in range(count):
-
-                button = buttons.nth(i)
-
-                try:
-                    if not await button.is_visible(
-                        timeout=500
-                    ):
-                        continue
-
-                    text = (
-                        await button.inner_text(
-                            timeout=1000
-                        )
-                    ).strip().lower()
-
-                    if (
-                        "stay on this site" in text
-                        or (
-                            "stay" in text
-                            and "site" in text
-                        )
-                    ):
-                        await button.click(
-                            timeout=3000
-                        )
-
-                        await page.wait_for_timeout(
-                            500
-                        )
-
-                        return
-
-                except Exception:
-                    continue
-
-        except Exception:
-            pass
-
-    except Exception:
-        # Popup handling must never break the main flow.
-        pass
-
-    # =========================================================
-    # OPEN PLAYSTATION PAGE
-    # =========================================================
 
     async def open_product_page(
         self,
@@ -303,14 +223,10 @@ class BrowserManager:
             timeout=60000,
         )
 
-        # Handle:
-        # "Different Location Detected"
         await self.handle_location_popup(
             page
         )
 
-        # Give Rooter enough time to render
-        # its desktop UI.
         await page.wait_for_timeout(
             2000
         )
@@ -320,10 +236,6 @@ class BrowserManager:
         )
 
         return page
-
-    # =========================================================
-    # ENSURE PLAYSTATION PAGE
-    # =========================================================
 
     async def ensure_product_page(
         self,
@@ -363,10 +275,6 @@ class BrowserManager:
 
         return page
 
-    # =========================================================
-    # SAVE SESSION
-    # =========================================================
-
     async def save_session(
         self,
         slot_id: str,
@@ -393,10 +301,6 @@ class BrowserManager:
             path=str(storage_file)
         )
 
-    # =========================================================
-    # CLOSE SLOT
-    # =========================================================
-
     async def close_slot(
         self,
         slot_id: str,
@@ -412,10 +316,6 @@ class BrowserManager:
 
         await context.close()
 
-    # =========================================================
-    # LOGOUT
-    # =========================================================
-
     async def logout_slot(
         self,
         slot_id: str,
@@ -428,10 +328,6 @@ class BrowserManager:
         self.sessions.delete_session(
             slot_id
         )
-
-    # =========================================================
-    # CLOSE EVERYTHING
-    # =========================================================
 
     async def close(self):
 
