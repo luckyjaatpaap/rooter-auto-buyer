@@ -1,4 +1,3 @@
-from pathlib import Path
 from typing import Dict
 
 from playwright.async_api import (
@@ -14,15 +13,24 @@ from .sessions import SessionManager
 
 
 class BrowserManager:
-    VIEWPORT_WIDTH = 1280
-    VIEWPORT_HEIGHT = 720
-    DEVICE_SCALE_FACTOR = 1.2
+    # =========================================================
+    # FIXED DESKTOP CONFIGURATION
+    # =========================================================
+
+    VIEWPORT_WIDTH = 1536
+    VIEWPORT_HEIGHT = 864
 
     def __init__(self):
         self.playwright: Playwright | None = None
         self.browser: Browser | None = None
+
         self.contexts: Dict[str, BrowserContext] = {}
+
         self.sessions = SessionManager()
+
+    # =========================================================
+    # START CHROMIUM
+    # =========================================================
 
     async def start(self):
         self.playwright = await async_playwright().start()
@@ -34,8 +42,13 @@ class BrowserManager:
                 "--disable-dev-shm-usage",
                 "--disable-gpu",
                 "--disable-features=Translate",
+                "--window-size=1536,864",
             ],
         )
+
+    # =========================================================
+    # DESKTOP CONTEXT SETTINGS
+    # =========================================================
 
     def context_options(self):
         return {
@@ -43,12 +56,30 @@ class BrowserManager:
                 "width": self.VIEWPORT_WIDTH,
                 "height": self.VIEWPORT_HEIGHT,
             },
-            "device_scale_factor": self.DEVICE_SCALE_FACTOR,
+
+            "device_scale_factor": 1,
+
             "is_mobile": False,
+
             "has_touch": False,
+
             "locale": "en-IN",
+
             "timezone_id": "Asia/Kolkata",
+
+            "user_agent": (
+                "Mozilla/5.0 "
+                "(X11; Linux x86_64) "
+                "AppleWebKit/537.36 "
+                "(KHTML, like Gecko) "
+                "Chrome/131.0.0.0 "
+                "Safari/537.36"
+            ),
         }
+
+    # =========================================================
+    # GET / CREATE ACCOUNT CONTEXT
+    # =========================================================
 
     async def get_context(
         self,
@@ -87,6 +118,10 @@ class BrowserManager:
 
         return context
 
+    # =========================================================
+    # GET ACCOUNT PAGE
+    # =========================================================
+
     async def get_page(
         self,
         slot_id: str,
@@ -99,9 +134,15 @@ class BrowserManager:
         pages = context.pages
 
         if pages:
-            return pages[0]
+            page = pages[0]
+        else:
+            page = await context.new_page()
 
-        return await context.new_page()
+        return page
+
+    # =========================================================
+    # HANDLE ROOTER LOCATION POPUP
+    # =========================================================
 
     async def handle_location_popup(
         self,
@@ -116,12 +157,12 @@ class BrowserManager:
             if await button.count() == 0:
                 return
 
-            first_button = button.first
+            button = button.first
 
-            if await first_button.is_visible(
+            if await button.is_visible(
                 timeout=3000
             ):
-                await first_button.click(
+                await button.click(
                     timeout=5000
                 )
 
@@ -130,7 +171,12 @@ class BrowserManager:
                 )
 
         except Exception:
+            # Popup may not appear.
             pass
+
+    # =========================================================
+    # OPEN PLAYSTATION PAGE
+    # =========================================================
 
     async def open_product_page(
         self,
@@ -139,6 +185,13 @@ class BrowserManager:
 
         page = await self.get_page(
             slot_id
+        )
+
+        await page.set_viewport_size(
+            {
+                "width": self.VIEWPORT_WIDTH,
+                "height": self.VIEWPORT_HEIGHT,
+            }
         )
 
         await page.goto(
@@ -161,6 +214,10 @@ class BrowserManager:
 
         return page
 
+    # =========================================================
+    # ENSURE ACCOUNT IS ON PRODUCT PAGE
+    # =========================================================
+
     async def ensure_product_page(
         self,
         slot_id: str,
@@ -168,6 +225,13 @@ class BrowserManager:
 
         page = await self.get_page(
             slot_id
+        )
+
+        await page.set_viewport_size(
+            {
+                "width": self.VIEWPORT_WIDTH,
+                "height": self.VIEWPORT_HEIGHT,
+            }
         )
 
         current_url = page.url or ""
@@ -185,7 +249,6 @@ class BrowserManager:
             page = await self.open_product_page(
                 slot_id
             )
-
         else:
             await self.handle_location_popup(
                 page
@@ -196,6 +259,10 @@ class BrowserManager:
             )
 
         return page
+
+    # =========================================================
+    # SAVE SESSION
+    # =========================================================
 
     async def save_session(
         self,
@@ -222,6 +289,10 @@ class BrowserManager:
             path=str(storage_file)
         )
 
+    # =========================================================
+    # CLOSE ONE SLOT
+    # =========================================================
+
     async def close_slot(
         self,
         slot_id: str,
@@ -236,6 +307,10 @@ class BrowserManager:
 
         await context.close()
 
+    # =========================================================
+    # LOGOUT + DELETE SESSION
+    # =========================================================
+
     async def logout_slot(
         self,
         slot_id: str,
@@ -247,6 +322,10 @@ class BrowserManager:
         self.sessions.delete_session(
             slot_id
         )
+
+    # =========================================================
+    # CLOSE EVERYTHING
+    # =========================================================
 
     async def close(self):
         for slot_id in list(
