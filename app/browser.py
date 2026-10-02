@@ -61,20 +61,24 @@ class BrowserManager:
             session_dir / "storage_state.json"
         )
 
+        context_options = {
+            "viewport": {
+                "width": 1536,
+                "height": 864,
+            },
+            "device_scale_factor": 1,
+            "is_mobile": False,
+            "has_touch": False,
+        }
+
         if storage_file.exists():
             context = await self.browser.new_context(
                 storage_state=str(storage_file),
-                viewport={
-                    "width": 1920,
-                    "height": 1080,
-                },
+                **context_options,
             )
         else:
             context = await self.browser.new_context(
-                viewport={
-                    "width": 1920,
-                    "height": 1080,
-                },
+                **context_options,
             )
 
         self.contexts[slot_id] = context
@@ -126,7 +130,6 @@ class BrowserManager:
 
         except Exception:
             # Popup may not appear.
-            # That is completely fine.
             pass
 
     # ---------------------------------------------------------
