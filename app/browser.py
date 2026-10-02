@@ -15,23 +15,26 @@ from .sessions import SessionManager
 class BrowserManager:
 
     # =========================================================
-    # FIXED DESKTOP SYSTEM
+    # REAL DESKTOP WINDOW
     # =========================================================
 
-    VIEWPORT_WIDTH = 1200
-    VIEWPORT_HEIGHT = 675
+    WINDOW_WIDTH = 1200
+    WINDOW_HEIGHT = 675
 
     def __init__(self):
         self.playwright: Playwright | None = None
         self.browser: Browser | None = None
+
         self.contexts: Dict[str, BrowserContext] = {}
+
         self.sessions = SessionManager()
 
     # =========================================================
-    # START BROWSER
+    # START REAL DESKTOP CHROMIUM
     # =========================================================
 
     async def start(self):
+
         self.playwright = await async_playwright().start()
 
         self.browser = await self.playwright.chromium.launch(
@@ -40,34 +43,45 @@ class BrowserManager:
                 "--no-sandbox",
                 "--disable-dev-shm-usage",
                 "--disable-gpu",
-                "--disable-features=Translate",
+
+                # Real desktop window size
                 "--window-size=1200,675",
+
+                # Prevent Chromium from applying
+                # automatic scaling.
+                "--force-device-scale-factor=1",
+
+                "--disable-features=Translate",
             ],
         )
 
     # =========================================================
-    # FIXED DESKTOP CONTEXT
+    # DESKTOP CONTEXT
     # =========================================================
 
     def context_options(self):
+
         return {
-            "viewport": {
-                "width": 1200,
-                "height": 675,
+            # IMPORTANT:
+            # Do NOT use a fixed Playwright viewport.
+            #
+            # This lets Chromium behave like a real
+            # desktop browser window.
+
+            "viewport": None,
+
+            "screen": {
+                "width": self.WINDOW_WIDTH,
+                "height": self.WINDOW_HEIGHT,
             },
-            "device_scale_factor": 1,
+
             "is_mobile": False,
+
             "has_touch": False,
+
             "locale": "en-IN",
+
             "timezone_id": "Asia/Kolkata",
-            "user_agent": (
-                "Mozilla/5.0 "
-                "(X11; Linux x86_64) "
-                "AppleWebKit/537.36 "
-                "(KHTML, like Gecko) "
-                "Chrome/131.0.0.0 "
-                "Safari/537.36"
-            ),
         }
 
     # =========================================================
@@ -98,11 +112,14 @@ class BrowserManager:
         options = self.context_options()
 
         if storage_file.exists():
+
             context = await self.browser.new_context(
                 storage_state=str(storage_file),
                 **options,
             )
+
         else:
+
             context = await self.browser.new_context(
                 **options,
             )
@@ -112,7 +129,7 @@ class BrowserManager:
         return context
 
     # =========================================================
-    # GET PAGE
+    # GET ACCOUNT PAGE
     # =========================================================
 
     async def get_page(
@@ -127,21 +144,21 @@ class BrowserManager:
         pages = context.pages
 
         if pages:
-            page = pages[0]
-        else:
-            page = await context.new_page()
+            return pages[0]
 
-        return page
+        return await context.new_page()
 
     # =========================================================
-    # HANDLE ROOTER LOCATION POPUP
+    # LOCATION POPUP
     # =========================================================
 
     async def handle_location_popup(
         self,
         page: Page,
     ):
+
         try:
+
             button = page.get_by_text(
                 "No, stay on this site",
                 exact=True,
@@ -155,6 +172,7 @@ class BrowserManager:
             if await button.is_visible(
                 timeout=3000
             ):
+
                 await button.click(
                     timeout=5000
                 )
@@ -164,6 +182,8 @@ class BrowserManager:
                 )
 
         except Exception:
+
+            # Popup is optional.
             pass
 
     # =========================================================
@@ -179,14 +199,6 @@ class BrowserManager:
             slot_id
         )
 
-        # Force exact desktop viewport.
-        await page.set_viewport_size(
-            {
-                "width": 1200,
-                "height": 675,
-            }
-        )
-
         await page.goto(
             settings.product_url,
             wait_until="domcontentloaded",
@@ -199,12 +211,12 @@ class BrowserManager:
             page
         )
 
-        # Allow Rooter client-side UI to settle.
+        # Give Rooter enough time to render
+        # its desktop UI.
         await page.wait_for_timeout(
-            1500
+            2000
         )
 
-        # Always start at top.
         await page.evaluate(
             "window.scrollTo(0, 0)"
         )
@@ -224,13 +236,6 @@ class BrowserManager:
             slot_id
         )
 
-        await page.set_viewport_size(
-            {
-                "width": 1200,
-                "height": 675,
-            }
-        )
-
         current_url = page.url or ""
 
         product_path = (
@@ -243,11 +248,13 @@ class BrowserManager:
             or current_url == "about:blank"
             or product_path not in current_url
         ):
+
             page = await self.open_product_page(
                 slot_id
             )
 
         else:
+
             await self.handle_location_popup(
                 page
             )
@@ -266,6 +273,7 @@ class BrowserManager:
         self,
         slot_id: str,
     ):
+
         context = self.contexts.get(
             slot_id
         )
@@ -288,13 +296,14 @@ class BrowserManager:
         )
 
     # =========================================================
-    # CLOSE ONE ACCOUNT
+    # CLOSE SLOT
     # =========================================================
 
     async def close_slot(
         self,
         slot_id: str,
     ):
+
         context = self.contexts.pop(
             slot_id,
             None,
@@ -306,13 +315,14 @@ class BrowserManager:
         await context.close()
 
     # =========================================================
-    # LOGOUT + DELETE SESSION
+    # LOGOUT
     # =========================================================
 
     async def logout_slot(
         self,
         slot_id: str,
     ):
+
         await self.close_slot(
             slot_id
         )
@@ -330,14 +340,19 @@ class BrowserManager:
         for slot_id in list(
             self.contexts.keys()
         ):
+
             await self.close_slot(
                 slot_id
             )
 
         if self.browser is not None:
+
             await self.browser.close()
+
             self.browser = None
 
         if self.playwright is not None:
+
             await self.playwright.stop()
+
             self.playwright = None
