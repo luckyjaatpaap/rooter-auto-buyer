@@ -283,216 +283,98 @@ class AccountController:
 
     # =========================================================
     # OPEN LOGIN POPUP
+    #
+    # ROOTER DESKTOP HEADER:
+    #
+    #       [ WALLET ] [ PROFILE ]
+    #                    ^^^^^^^
+    #                    CLICK THIS
+    #
+    # The wallet is NEVER selected.
     # =========================================================
 
-    async def _open_login_popup(self, page: Page) -> bool:
-    """
-    Rooter login flow:
-    Top-right has exactly two important icon buttons:
-      LEFT  = Wallet
-      RIGHT = Profile
-
-    Always target the right-side profile control.
-    """
-
-    async def login_popup_open() -> bool:
-        selectors = [
-            'input[type="tel"]',
-            'input[inputmode="tel"]',
-            'input[autocomplete="tel"]',
-            'input[name*="mobile" i]',
-            'input[name*="phone" i]',
-        ]
-
-        for selector in selectors:
-            locator = page.locator(selector)
-
-            for i in range(await locator.count()):
-                try:
-                    if await locator.nth(i).is_visible(
-                        timeout=300
-                    ):
-                        return True
-                except Exception:
-                    pass
-
-        return False
-
-    # Already open?
-    if await login_popup_open():
-        return True
-
-    # ---------------------------------------------------------
-    # Find top-right controls only
-    # ---------------------------------------------------------
-
-    controls = page.locator(
-        "header button, "
-        "header [role='button'], "
-        "header a"
-    )
-
-    candidates = []
-
-    for i in range(await controls.count()):
-
-        try:
-            element = controls.nth(i)
-
-            if not await element.is_visible(timeout=300):
-                continue
-
-            box = await element.bounding_box()
-
-            if not box:
-                continue
-
-            x = box["x"]
-            y = box["y"]
-            width = box["width"]
-            height = box["height"]
-
-            # Only small icon-like controls near top-right.
-            if y > 150:
-                continue
-
-            if width > 100 or height > 100:
-                continue
-
-            # Must actually be near the right side.
-            viewport_width = await page.evaluate(
-                "window.innerWidth"
-            )
-
-            if x < viewport_width * 0.65:
-                continue
-
-            aria = (
-                await element.get_attribute("aria-label")
-                or ""
-            ).lower()
-
-            title = (
-                await element.get_attribute("title")
-                or ""
-            ).lower()
-
-            cls = (
-                await element.get_attribute("class")
-                or ""
-            ).lower()
-
-            text = ""
-
-            try:
-                text = (
-                    await element.inner_text(
-                        timeout=200
-                    )
-                ).strip().lower()
-            except Exception:
-                pass
-
-            info = f"{aria} {title} {cls} {text}"
-
-            # Never choose wallet.
-            if any(word in info for word in [
-                "wallet",
-                "balance",
-                "credit",
-                "coin",
-            ]):
-                continue
-
-            # Profile/account is a direct match.
-            profile_score = 0
-
-            if any(word in info for word in [
-                "profile",
-                "account",
-                "avatar",
-                "user",
-            ]):
-                profile_score += 100
-
-            # Rightmost controls get priority.
-            profile_score += int(x)
-
-            candidates.append(
-                (
-                    profile_score,
-                    x,
-                    element,
-                )
-            )
-
-        except Exception:
-            continue
-
-    # Rightmost/profile candidate first.
-    candidates.sort(
-        key=lambda item: item[0],
-        reverse=True,
-    )
-
-    for _, _, element in candidates:
-
-        try:
-            await element.scroll_into_view_if_needed()
-
-            await element.click(
-                timeout=5000
-            )
-
-            await page.wait_for_timeout(1200)
-
-            if await login_popup_open():
-                return True
-
-        except Exception:
-            continue
-
-    return False
+    async def _open_login_popup(
+        self,
+        page,
+    ):
 
         # -----------------------------------------------------
-        # Desktop header fallback
-        #
-        # Profile is the right-side account control,
-        # immediately after the wallet control.
-        # We try header buttons from right to left.
+        # Check whether login popup is already open.
         # -----------------------------------------------------
 
-        header_controls = page.locator(
-            "header button, "
-            "header [role='button'], "
-            "header a"
+        mobile_input = await self._find_mobile_input(
+            page
         )
 
-        try:
+        if mobile_input is not None:
+            return mobile_input
 
-            count = await header_controls.count()
+        # -----------------------------------------------------
+        # STEP 1:
+        # Look specifically for semantic profile/account
+        # controls.
+        # -----------------------------------------------------
 
-            for index in range(
-                count - 1,
-                -1,
-                -1,
-            ):
+        profile_selectors = [
+            '[aria-label*="profile" i]',
+            '[aria-label*="account" i]',
+            '[aria-label*="avatar" i]',
+            '[aria-label*="user" i]',
+            '[title*="profile" i]',
+            '[title*="account" i]',
+            '[title*="avatar" i]',
+            '[title*="user" i]',
+            'img[alt*="profile" i]',
+            'img[alt*="avatar" i]',
+            'img[alt*="account" i]',
+            'img[alt*="user" i]',
+        ]
 
-                try:
+        for selector in profile_selectors:
 
-                    item = header_controls.nth(index)
+            try:
+
+                locator = page.locator(
+                    selector
+                )
+
+                count = await locator.count()
+
+                for index in range(count):
+
+                    item = locator.nth(index)
 
                     if not await item.is_visible(
-                        timeout=300
+                        timeout=500
                     ):
                         continue
 
-                    await item.click(
-                        timeout=3000
-                    )
+                    # First click the actual element.
+                    try:
+
+                        await item.click(
+                            timeout=4000
+                        )
+
+                    except Exception:
+
+                        # If the visible item is an image,
+                        # click its parent.
+                        try:
+
+                            parent = item.locator(
+                                ".."
+                            )
+
+                            await parent.click(
+                                timeout=4000
+                            )
+
+                        except Exception:
+                            continue
 
                     await page.wait_for_timeout(
-                        800
+                        1000
                     )
 
                     mobile_input = (
@@ -503,6 +385,338 @@ class AccountController:
 
                     if mobile_input is not None:
                         return mobile_input
+
+            except Exception:
+                continue
+
+        # -----------------------------------------------------
+        # STEP 2:
+        # Exact desktop layout logic.
+        #
+        # Only small controls in the upper-right area
+        # are considered.
+        #
+        # Wallet-like controls are excluded.
+        # Profile/account-like controls get priority.
+        # If semantic information is unavailable,
+        # the RIGHTMOST small icon is tried first.
+        # -----------------------------------------------------
+
+        header_controls = page.locator(
+            "header button, "
+            "header [role='button'], "
+            "header a"
+        )
+
+        candidates = []
+
+        try:
+
+            count = await header_controls.count()
+
+            viewport_width = await page.evaluate(
+                "window.innerWidth"
+            )
+
+            for index in range(count):
+
+                try:
+
+                    item = header_controls.nth(index)
+
+                    if not await item.is_visible(
+                        timeout=300
+                    ):
+                        continue
+
+                    box = await item.bounding_box()
+
+                    if not box:
+                        continue
+
+                    x = box["x"]
+                    y = box["y"]
+                    width = box["width"]
+                    height = box["height"]
+
+                    # Only header/top controls.
+                    if y > 150:
+                        continue
+
+                    # Profile/wallet are icon-sized.
+                    if width > 110 or height > 110:
+                        continue
+
+                    # Must be in the right-side area.
+                    if x < viewport_width * 0.65:
+                        continue
+
+                    aria = (
+                        await item.get_attribute(
+                            "aria-label"
+                        )
+                        or ""
+                    )
+
+                    title = (
+                        await item.get_attribute(
+                            "title"
+                        )
+                        or ""
+                    )
+
+                    class_name = (
+                        await item.get_attribute(
+                            "class"
+                        )
+                        or ""
+                    )
+
+                    text = ""
+
+                    try:
+                        text = (
+                            await item.inner_text(
+                                timeout=200
+                            )
+                        )
+                    except Exception:
+                        pass
+
+                    info = (
+                        f"{aria} "
+                        f"{title} "
+                        f"{class_name} "
+                        f"{text}"
+                    ).lower()
+
+                    # -------------------------------------------------
+                    # IMPORTANT:
+                    # Wallet must NEVER be clicked.
+                    # -------------------------------------------------
+
+                    wallet_words = [
+                        "wallet",
+                        "balance",
+                        "credit",
+                        "credits",
+                        "coin",
+                        "money",
+                    ]
+
+                    if any(
+                        word in info
+                        for word in wallet_words
+                    ):
+                        continue
+
+                    # -------------------------------------------------
+                    # Score profile candidates.
+                    # -------------------------------------------------
+
+                    score = 0
+
+                    profile_words = [
+                        "profile",
+                        "account",
+                        "avatar",
+                        "user",
+                        "login",
+                        "sign in",
+                    ]
+
+                    if any(
+                        word in info
+                        for word in profile_words
+                    ):
+                        score += 10000
+
+                    # Rightmost gets priority.
+                    score += int(x * 10)
+
+                    # Icon-sized control.
+                    if (
+                        20 <= width <= 90
+                        and 20 <= height <= 90
+                    ):
+                        score += 100
+
+                    candidates.append(
+                        (
+                            score,
+                            x,
+                            item,
+                        )
+                    )
+
+                except Exception:
+                    continue
+
+        except Exception:
+            pass
+
+        # -----------------------------------------------------
+        # Highest score first.
+        # -----------------------------------------------------
+
+        candidates.sort(
+            key=lambda item: item[0],
+            reverse=True,
+        )
+
+        for _, _, item in candidates:
+
+            try:
+
+                await item.scroll_into_view_if_needed()
+
+                await item.click(
+                    timeout=5000
+                )
+
+                await page.wait_for_timeout(
+                    1200
+                )
+
+                mobile_input = (
+                    await self._find_mobile_input(
+                        page
+                    )
+                )
+
+                if mobile_input is not None:
+                    return mobile_input
+
+            except Exception:
+                continue
+
+        # -----------------------------------------------------
+        # STEP 3:
+        # Very specific fallback:
+        #
+        # Find wallet-looking control, then choose the
+        # nearest small clickable control immediately
+        # to its RIGHT.
+        #
+        # This directly models:
+        #
+        #       WALLET -> PROFILE
+        # -----------------------------------------------------
+
+        try:
+
+            wallet_locators = page.locator(
+                "[aria-label*='wallet' i], "
+                "[title*='wallet' i], "
+                "[class*='wallet' i]"
+            )
+
+            wallet_count = await wallet_locators.count()
+
+            for wallet_index in range(
+                wallet_count
+            ):
+
+                try:
+
+                    wallet = wallet_locators.nth(
+                        wallet_index
+                    )
+
+                    if not await wallet.is_visible(
+                        timeout=300
+                    ):
+                        continue
+
+                    wallet_box = (
+                        await wallet.bounding_box()
+                    )
+
+                    if not wallet_box:
+                        continue
+
+                    wallet_right = (
+                        wallet_box["x"]
+                        + wallet_box["width"]
+                    )
+
+                    nearby = []
+
+                    for index in range(
+                        await header_controls.count()
+                    ):
+
+                        try:
+
+                            item = header_controls.nth(
+                                index
+                            )
+
+                            if not await item.is_visible(
+                                timeout=200
+                            ):
+                                continue
+
+                            box = (
+                                await item.bounding_box()
+                            )
+
+                            if not box:
+                                continue
+
+                            candidate_left = box["x"]
+
+                            distance = (
+                                candidate_left
+                                - wallet_right
+                            )
+
+                            # Profile is immediately to wallet's
+                            # right, not far away.
+                            if (
+                                0 <= distance <= 180
+                                and box["width"] <= 110
+                                and box["height"] <= 110
+                            ):
+
+                                nearby.append(
+                                    (
+                                        distance,
+                                        item,
+                                    )
+                                )
+
+                        except Exception:
+                            continue
+
+                    # Nearest control to the right of wallet.
+                    nearby.sort(
+                        key=lambda item: item[0]
+                    )
+
+                    for _, item in nearby:
+
+                        try:
+
+                            await item.click(
+                                timeout=5000
+                            )
+
+                            await page.wait_for_timeout(
+                                1200
+                            )
+
+                            mobile_input = (
+                                await self._find_mobile_input(
+                                    page
+                                )
+                            )
+
+                            if mobile_input is not None:
+                                return mobile_input
+
+                        except Exception:
+                            continue
 
                 except Exception:
                     continue
@@ -524,18 +738,6 @@ class AccountController:
         candidates = [
             page.get_by_role(
                 "button",
-                name="Send OTP",
-                exact=True,
-            ),
-            page.get_by_text(
-                "Send OTP",
-                exact=True,
-            ),
-            page.locator(
-                'button:has-text("Send OTP")'
-            ),
-            page.get_by_role(
-                "button",
                 name="Continue",
                 exact=True,
             ),
@@ -545,6 +747,18 @@ class AccountController:
             ),
             page.locator(
                 'button:has-text("Continue")'
+            ),
+            page.get_by_role(
+                "button",
+                name="Send OTP",
+                exact=True,
+            ),
+            page.get_by_text(
+                "Send OTP",
+                exact=True,
+            ),
+            page.locator(
+                'button:has-text("Send OTP")'
             ),
         ]
 
@@ -578,12 +792,13 @@ class AccountController:
         page,
     ):
 
-        # First try common OTP selectors.
         selectors = [
             'input[autocomplete="one-time-code"]',
             'input[inputmode="numeric"]',
             'input[placeholder*="OTP" i]',
             'input[placeholder*="code" i]',
+            'input[aria-label*="OTP" i]',
+            'input[aria-label*="code" i]',
         ]
 
         found = []
@@ -605,7 +820,6 @@ class AccountController:
                     if await item.is_visible(
                         timeout=300
                     ):
-
                         found.append(item)
 
                 if found:
@@ -614,7 +828,7 @@ class AccountController:
             except Exception:
                 continue
 
-        # Fallback: visible numeric/tel inputs.
+        # Fallback.
         selectors = [
             'input[type="tel"]',
             'input[type="number"]',
@@ -637,7 +851,6 @@ class AccountController:
                     if await item.is_visible(
                         timeout=300
                     ):
-
                         found.append(item)
 
                 if found:
@@ -754,7 +967,7 @@ class AccountController:
         try:
 
             # -------------------------------------------------
-            # Open target page
+            # 1. Open product page
             # -------------------------------------------------
 
             page = await self.browser.open_product_page(
@@ -769,7 +982,7 @@ class AccountController:
             )
 
             # -------------------------------------------------
-            # PROFILE ICON -> LOGIN POPUP
+            # 2. PROFILE ICON
             # -------------------------------------------------
 
             mobile_input = (
@@ -780,13 +993,47 @@ class AccountController:
 
             if mobile_input is None:
 
+                # Take diagnostic screenshot.
+                screenshot_path = (
+                    self.screenshots_dir
+                    / f"{slot_id}_login_profile_error.png"
+                )
+
+                try:
+
+                    await page.screenshot(
+                        path=str(screenshot_path),
+                        full_page=False,
+                    )
+
+                    account.update(
+                        last_screenshot=str(
+                            screenshot_path
+                        )
+                    )
+
+                    await self.telegram.send_photo(
+                        photo_path=str(
+                            screenshot_path
+                        ),
+                        caption=(
+                            "❌ PROFILE ICON DETECTION FAILED\n\n"
+                            f"Slot: {slot_id}\n"
+                            "Expected: Wallet → Profile\n"
+                            f"Page: {page.url}"
+                        ),
+                    )
+
+                except Exception:
+                    pass
+
                 raise RuntimeError(
                     "Rooter Login popup could not be opened "
                     "from the top-right profile icon."
                 )
 
             # -------------------------------------------------
-            # FILL MOBILE NUMBER
+            # 3. Fill mobile number
             # -------------------------------------------------
 
             await mobile_input.fill(
@@ -794,7 +1041,7 @@ class AccountController:
             )
 
             # -------------------------------------------------
-            # SEND OTP
+            # 4. Continue / Send OTP
             # -------------------------------------------------
 
             send_otp_button = (
@@ -806,7 +1053,7 @@ class AccountController:
             if send_otp_button is None:
 
                 raise RuntimeError(
-                    "Rooter Send OTP button "
+                    "Rooter Continue button "
                     "was not found."
                 )
 
@@ -815,7 +1062,7 @@ class AccountController:
             )
 
             # -------------------------------------------------
-            # WAIT FOR OTP POPUP
+            # 5. Wait for OTP popup
             # -------------------------------------------------
 
             otp_inputs = []
@@ -843,7 +1090,7 @@ class AccountController:
                 )
 
             account.update(
-                current_page=page.url,
+                current_page="otp_verification",
                 last_error=None,
             )
 
@@ -919,6 +1166,10 @@ class AccountController:
 
         try:
 
+            # -------------------------------------------------
+            # 1. Get current OTP page
+            # -------------------------------------------------
+
             page = await self.browser.get_page(
                 slot_id
             )
@@ -928,7 +1179,7 @@ class AccountController:
             )
 
             # -------------------------------------------------
-            # FIND OTP INPUT(S)
+            # 2. Find OTP inputs
             # -------------------------------------------------
 
             otp_inputs = []
@@ -955,11 +1206,11 @@ class AccountController:
                 )
 
             # -------------------------------------------------
-            # FILL OTP
+            # 3. Fill OTP
             #
             # Supports:
-            # 1. One six-digit input
-            # 2. Six separate OTP boxes
+            # - single 6-digit input
+            # - six separate boxes
             # -------------------------------------------------
 
             if len(otp_inputs) == 1:
@@ -970,7 +1221,6 @@ class AccountController:
 
             else:
 
-                # Use first six visible boxes.
                 boxes = otp_inputs[:6]
 
                 if len(boxes) < 6:
@@ -993,7 +1243,7 @@ class AccountController:
             )
 
             # -------------------------------------------------
-            # VERIFY NOW
+            # 4. Verify Now
             # -------------------------------------------------
 
             verify_button = (
@@ -1014,7 +1264,7 @@ class AccountController:
             )
 
             # -------------------------------------------------
-            # WAIT FOR LOGIN RESULT
+            # 5. Wait for successful login
             # -------------------------------------------------
 
             await page.wait_for_timeout(
@@ -1026,7 +1276,7 @@ class AccountController:
             )
 
             # -------------------------------------------------
-            # RETURN TO PRODUCT PAGE
+            # 6. Return to PlayStation product page
             # -------------------------------------------------
 
             page = await self.browser.ensure_product_page(
@@ -1038,12 +1288,16 @@ class AccountController:
             )
 
             # -------------------------------------------------
-            # SAVE AUTHENTICATED SESSION
+            # 7. Save authenticated session
             # -------------------------------------------------
 
             await self.browser.save_session(
                 slot_id
             )
+
+            # -------------------------------------------------
+            # 8. Mark account logged in
+            # -------------------------------------------------
 
             account.update(
                 logged_in=True,
@@ -1053,7 +1307,7 @@ class AccountController:
             )
 
             # -------------------------------------------------
-            # LOGIN SUCCESS SCREENSHOT
+            # 9. Login-success screenshot
             # -------------------------------------------------
 
             screenshot_path = (
