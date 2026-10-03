@@ -1,4 +1,5 @@
 import asyncio
+from datetime import datetime
 from pathlib import Path
 from typing import Dict
 
@@ -179,7 +180,6 @@ class AccountController:
     # =========================================================
 
     async def _open_login_popup(self, page):
-
         try:
             await self.browser.handle_location_popup(page)
             await page.wait_for_timeout(1000)
@@ -302,7 +302,6 @@ class AccountController:
             page.get_by_role("button", name="Continue", exact=True),
             page.get_by_text("Continue", exact=True),
             page.locator('button:has-text("Continue")'),
-
             page.get_by_role("button", name="Send OTP", exact=True),
             page.get_by_text("Send OTP", exact=True),
             page.locator('button:has-text("Send OTP")'),
@@ -450,10 +449,8 @@ class AccountController:
                             f"Page: {page.url}"
                         ),
                     )
-                    # 🧹 Delete screenshot after sending
                     if screenshot_path.exists():
                         screenshot_path.unlink()
-                        
                 except Exception:
                     pass
                 raise RuntimeError("Rooter Login popup could not be opened from the profile icon.")
@@ -582,7 +579,6 @@ class AccountController:
                 ),
             )
             
-            # 🧹 Delete screenshot after sending
             if screenshot_path.exists():
                 screenshot_path.unlink()
 
@@ -639,7 +635,6 @@ class AccountController:
                 caption=f"🖥 {slot_id}\nPage: {page.url}",
             )
             
-            # 🧹 Delete screenshot after sending
             if screenshot_path.exists():
                 screenshot_path.unlink()
 
@@ -768,7 +763,6 @@ class AccountController:
                 ),
             )
             
-            # 🧹 Delete screenshot after sending
             if screenshot_path.exists():
                 screenshot_path.unlink()
 
@@ -799,47 +793,160 @@ class AccountController:
                 pass
 
     # =========================================================
-    # 🎯 SNIPER BACKGROUND WORKER
+    # 🎯 SNIPER BACKGROUND WORKER (2 MIN AUTO-REFRESH & SMART RETRY)
     # =========================================================
     async def _sniper_worker(self, slot_id: str):
+        from datetime import datetime
+        import asyncio
         account = self.get_account(slot_id)
+        
         try:
             page = await self.browser.ensure_product_page(slot_id)
-            await self.telegram.send_message(f"🎯 Sniper ACTIVATED for {slot_id}. Waiting for stock...")
+            await self.telegram.send_message(f"🎯 Sniper ACTIVATED for {slot_id}. Auto-refreshing every 2 mins...")
 
             while True:
-                # Wait until monitor triggers the event
-                await self.stock_event.wait()
-                
-                account.update(current_page="SNIPER_EXECUTING")
-                
-                # Fast reload
-                await page.reload(wait_until="domcontentloaded", timeout=15000)
-                await self.browser.handle_location_popup(page)
-
-                # =========================================================
-                # 🛒 BUYING LOGIC (Update specific locators here)
-                # =========================================================
+                # 1. 2 Minute Wait ya Manual Trigger
                 try:
-                    # Update these locators with exact Rooter button text/classes
-                    buy_btn = page.get_by_role("button", name="Redeem", exact=False).first
-                    await buy_btn.wait_for(state="visible", timeout=3000)
-                    await buy_btn.click(timeout=3000)
-
-                    confirm_btn = page.get_by_role("button", name="Confirm", exact=False).first
-                    await confirm_btn.wait_for(state="visible", timeout=3000)
-                    await confirm_btn.click(timeout=3000)
-
-                    await self.telegram.send_message(f"✅✅ SUCCESS: Code Bought successfully from {slot_id}!")
+                    # 120 seconds (2 mins) ka timeout lagaya hai
+                    await asyncio.wait_for(self.stock_event.wait(), timeout=120.0)
+                    self.stock_event.clear() 
+                except asyncio.TimeoutError:
+                    pass
                 
-                except Exception as e:
-                    await self.telegram.send_message(f"⚠️ {slot_id} missed the drop or stock not available.")
+                account.update(current_page="CHECKING_STOCK")
+                
+                try:
+                    # 2. Page Reload aur Popup Handle
+                    await page.reload(wait_until="domcontentloaded", timeout=15000)
+                    await self.browser.handle_location_popup(page)
+                    
+                    # 3. 5000 Wala Code Select Karna
+                    rs_5000_option = page.locator("text=/Rs\\.?\\s*5000/i").first
+                    await rs_5000_option.wait_for(state="visible", timeout=8000)
+                    await rs_5000_option.click(timeout=3000)
+                    await page.wait_for_timeout(1500) # Options load hone ka wait
+                    
+                    # 4. Check karna ki Stock hai ya nahi (Pay via wallet button check)
+                    pay_btn_1 = page.get_by_role("button", name="Pay via wallet").first
+                    is_in_stock = await pay_btn_1.is_visible(timeout=2000)
+                    
+                    if not is_in_stock:
+                        # Stock nahi hai (Out of stock hai), loop continue karke 2 min baad fir try karega
+                        continue
 
-                # Delay before resetting loop to prevent multiple rapid attempts
-                await asyncio.sleep(5) 
+                    # ==========================================
+                    # 🚨 STOCK DETECTED - START BUY FLOW
+                    # ==========================================
+                    await self.telegram.send_message(f"🚨 STOCK DETECTED in {slot_id}! Starting auto-buy...")
+                    
+                    # Retry Loop: Pehle Quantity 2 try karega, fail hua toh 1
+                    for target_qty in [2, 1]:
+                        try:
+                            # Agar ye 1 Qty wala retry hai, toh ek baar refresh karke wapas select karo
+                            if target_qty == 1:
+                                await page.reload(wait_until="domcontentloaded", timeout=15000)
+                                await self.browser.handle_location_popup(page)
+                                rs_5000_option = page.locator("text=/Rs\\.?\\s*5000/i").first
+                                await rs_5000_option.wait_for(state="visible", timeout=8000)
+                                await rs_5000_option.click(timeout=3000)
+                                await page.wait_for_timeout(1500)
+                                pay_btn_1 = page.get_by_role("button", name="Pay via wallet").first
+
+                            # Qty 2 ke liye '+' dabao
+                            if target_qty == 2:
+                                try:
+                                    plus_btn = page.locator("button:has-text('+')").first
+                                    await plus_btn.wait_for(state="visible", timeout=3000)
+                                    await plus_btn.click(timeout=2000)
+                                    await page.wait_for_timeout(1000) 
+                                except Exception:
+                                    pass
+                            
+                            # Wallet Balance Extract Karna
+                            wallet_balance_text = "Balance info not found"
+                            try:
+                                balance_locator = page.locator("text=/Wallet Balance:/i").first
+                                if await balance_locator.is_visible(timeout=3000):
+                                    wallet_balance_text = await balance_locator.inner_text()
+                            except Exception:
+                                pass
+
+                            # SS Bhejna Balance Ke Sath BEFORE paying
+                            screenshot_path = self.screenshots_dir / f"{slot_id}_pre_buy_qty_{target_qty}.png"
+                            await page.screenshot(path=str(screenshot_path), full_page=False)
+                            
+                            await self.telegram.send_photo(
+                                photo_path=str(screenshot_path),
+                                caption=(
+                                    f"🛒 ATTEMPTING BUY (Qty {target_qty})!\n\n"
+                                    f"Slot: {slot_id}\n"
+                                    f"Balance Info: {wallet_balance_text}"
+                                )
+                            )
+                            if screenshot_path.exists():
+                                screenshot_path.unlink()
+
+                            # Insufficient Balance Check
+                            if "insufficient" in wallet_balance_text.lower() or "add money" in wallet_balance_text.lower():
+                                await self.telegram.send_message(f"🚨 INSUFFICIENT BALANCE in {slot_id}. Buy completely stopped.")
+                                break 
+                                
+                            # First Pay Button
+                            await pay_btn_1.wait_for(state="visible", timeout=5000)
+                            await pay_btn_1.click(timeout=3000)
+
+                            # Delivery Popup Wait
+                            await page.locator("text=Delivery Details").wait_for(state="visible", timeout=6000)
+                            await page.wait_for_timeout(1000)
+
+                            # Second Pay Button (Delivery Popup me)
+                            pay_btn_2 = page.get_by_role("button", name="Pay via wallet").last
+                            await pay_btn_2.wait_for(state="visible", timeout=5000)
+                            await pay_btn_2.click(timeout=3000)
+
+                            # Success Report
+                            current_time = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+                            await self.telegram.send_message(
+                                f"✅✅ SUCCESS: CODE PURCHASED!\n\n"
+                                f"Amount: Rs.5000\n"
+                                f"Quantity: {target_qty}\n"
+                                f"Slot: {slot_id}\n"
+                                f"Time: {current_time}"
+                            )
+                            
+                            break 
+
+                        except Exception as e:
+                            # Purchase error aaya
+                            error_ss = self.screenshots_dir / f"{slot_id}_error_qty_{target_qty}.png"
+                            try:
+                                await page.screenshot(path=str(error_ss), full_page=False)
+                                await self.telegram.send_photo(
+                                    photo_path=str(error_ss),
+                                    caption=f"⚠️ Failed to buy Qty {target_qty} for {slot_id}.\nError caught!"
+                                )
+                                if error_ss.exists():
+                                    error_ss.unlink()
+                            except Exception:
+                                pass
+                                
+                            if target_qty == 2:
+                                await self.telegram.send_message(f"🔄 {slot_id} retrying with Quantity 1...")
+                            else:
+                                await self.telegram.send_message(f"❌ {slot_id} completely failed for this drop.")
+
+                    # Buy attempt (success ya fail) ke baad wapas 10 sec hold kar ke agle stock ka wait
+                    await self.telegram.send_message(f"⏳ {slot_id} purchase cycle complete. Resuming 2-min auto-refresh...")
+                    await asyncio.sleep(10)
+                    await page.goto(settings.product_url)
+                    await self.browser.handle_location_popup(page)
+                    await asyncio.sleep(2) 
+
+                except Exception as loop_err:
+                    pass
 
         except Exception as e:
-            await self.telegram.send_message(f"❌ Sniper worker crashed for {slot_id}: {str(e)}")
+            await self.telegram.send_message(f"❌ Sniper worker critically crashed for {slot_id}: {str(e)}")
             self.sniper_tasks.pop(slot_id, None)
 
     # =========================================================
