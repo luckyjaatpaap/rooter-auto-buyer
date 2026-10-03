@@ -1,3 +1,4 @@
+import asyncio
 from pathlib import Path
 from typing import Dict
 
@@ -26,6 +27,12 @@ class AccountController:
         self.screenshots_dir.mkdir(parents=True, exist_ok=True)
 
         self._create_slots()
+
+        # =========================================================
+        # SNIPER MODE EVENTS & TASKS
+        # =========================================================
+        self.stock_event = asyncio.Event() 
+        self.sniper_tasks: Dict[str, asyncio.Task] = {}
 
     # =========================================================
     # SLOT MANAGEMENT
@@ -59,6 +66,10 @@ class AccountController:
         self.telegram.register_command("screen", self.handle_screen)
         self.telegram.register_command("refresh", self.handle_refresh)
         self.telegram.register_command("help", self.handle_help)
+        
+        # New sniper commands
+        self.telegram.register_command("sniper", self.handle_sniper_mode)
+        self.telegram.register_command("trigger_buy", self.handle_trigger_buy)
 
     # =========================================================
     # START
@@ -88,6 +99,8 @@ class AccountController:
             "/screen S1-A1\n"
             "/refresh S1-A1\n"
             "/logout S1-A1\n"
+            "/sniper all\n"
+            "/trigger_buy\n"
             "/help"
         )
 
@@ -102,6 +115,9 @@ class AccountController:
             phone = account.phone_number if account.phone_number else "-"
             login_state = "LOGGED IN" if account.logged_in else "NOT LOGGED IN"
             active_state = "ACTIVE" if account.active else "INACTIVE"
+            
+            # Check if sniper is active for this slot
+            sniper_state = "🔫 SNIPER ON" if account.slot_id in self.sniper_tasks else ""
 
             balance = (
                 f"₹{account.wallet_balance:.2f}"
@@ -111,7 +127,7 @@ class AccountController:
 
             lines.append(
                 f"{account.slot_id} | {login_state} | "
-                f"{active_state} | Balance: {balance}"
+                f"{active_state} | Balance: {balance} {sniper_state}"
             )
 
             if phone != "-":
@@ -151,10 +167,8 @@ class AccountController:
 
                 for index in range(count):
                     item = locator.nth(index)
-
                     if await item.is_visible(timeout=500):
                         return item
-
             except Exception:
                 continue
 
@@ -166,21 +180,16 @@ class AccountController:
 
     async def _open_login_popup(self, page):
 
-        # IMPORTANT:
-        # Location popup MUST be closed before profile detection.
         try:
             await self.browser.handle_location_popup(page)
             await page.wait_for_timeout(1000)
         except Exception:
             pass
 
-        # Check if login popup is already open.
         mobile_input = await self._find_mobile_input(page)
-
         if mobile_input is not None:
             return mobile_input
 
-        # First try visible login text.
         candidates = [
             page.get_by_text("Login / Sign Up", exact=True),
             page.get_by_text("Login", exact=True),
@@ -190,39 +199,24 @@ class AccountController:
         for candidate in candidates:
             try:
                 count = await candidate.count()
-
                 for index in range(count):
                     item = candidate.nth(index)
-
                     if not await item.is_visible(timeout=500):
                         continue
 
                     await item.click(timeout=5000)
                     await page.wait_for_timeout(1200)
 
-                    # Location popup can appear again after interaction.
                     try:
                         await self.browser.handle_location_popup(page)
                     except Exception:
                         pass
 
                     mobile_input = await self._find_mobile_input(page)
-
                     if mobile_input is not None:
                         return mobile_input
-
             except Exception:
                 continue
-
-        # =====================================================
-        # PROFILE ICON
-        # Rooter desktop layout:
-        # Wallet icon = left
-        # Profile icon = right
-        #
-        # We intentionally try the RIGHTMOST header control
-        # before generic selectors.
-        # =====================================================
 
         header_controls = page.locator(
             "header button, "
@@ -232,12 +226,9 @@ class AccountController:
 
         try:
             count = await header_controls.count()
-
-            # Rightmost visible header control first.
             for index in range(count - 1, -1, -1):
                 try:
                     item = header_controls.nth(index)
-
                     if not await item.is_visible(timeout=500):
                         continue
 
@@ -250,19 +241,12 @@ class AccountController:
                         pass
 
                     mobile_input = await self._find_mobile_input(page)
-
                     if mobile_input is not None:
                         return mobile_input
-
                 except Exception:
                     continue
-
         except Exception:
             pass
-
-        # =====================================================
-        # FALLBACK PROFILE SELECTORS
-        # =====================================================
 
         profile_selectors = [
             '[aria-label*="profile" i]',
@@ -283,7 +267,6 @@ class AccountController:
 
                 for index in range(count):
                     item = locator.nth(index)
-
                     if not await item.is_visible(timeout=500):
                         continue
 
@@ -303,10 +286,8 @@ class AccountController:
                         pass
 
                     mobile_input = await self._find_mobile_input(page)
-
                     if mobile_input is not None:
                         return mobile_input
-
             except Exception:
                 continue
 
@@ -330,13 +311,10 @@ class AccountController:
         for locator in candidates:
             try:
                 count = await locator.count()
-
                 for index in range(count):
                     item = locator.nth(index)
-
                     if await item.is_visible(timeout=500):
                         return item
-
             except Exception:
                 continue
 
@@ -360,16 +338,12 @@ class AccountController:
             try:
                 locator = page.locator(selector)
                 count = await locator.count()
-
                 for index in range(count):
                     item = locator.nth(index)
-
                     if await item.is_visible(timeout=300):
                         found.append(item)
-
                 if found:
                     return found
-
             except Exception:
                 continue
 
@@ -382,16 +356,12 @@ class AccountController:
             try:
                 locator = page.locator(selector)
                 count = await locator.count()
-
                 for index in range(count):
                     item = locator.nth(index)
-
                     if await item.is_visible(timeout=300):
                         found.append(item)
-
                 if found:
                     return found
-
             except Exception:
                 continue
 
@@ -411,13 +381,10 @@ class AccountController:
         for locator in candidates:
             try:
                 count = await locator.count()
-
                 for index in range(count):
                     item = locator.nth(index)
-
                     if await item.is_visible(timeout=500):
                         return item
-
             except Exception:
                 continue
 
@@ -428,13 +395,10 @@ class AccountController:
     # =========================================================
 
     async def handle_login(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
-
         args = context.args
 
         if len(args) < 2:
-            await update.message.reply_text(
-                "❌ Format:\n/login S1-A1 9876543210"
-            )
+            await update.message.reply_text("❌ Format:\n/login S1-A1 9876543210")
             return
 
         slot_id = args[0].upper()
@@ -447,22 +411,16 @@ class AccountController:
             return
 
         if account.logged_in:
-            await update.message.reply_text(
-                f"⚠️ {slot_id} is already logged in."
-            )
+            await update.message.reply_text(f"⚠️ {slot_id} is already logged in.")
             return
 
         if not phone_number.isdigit() or len(phone_number) != 10:
-            await update.message.reply_text(
-                "❌ Enter a valid 10-digit Indian mobile number."
-            )
+            await update.message.reply_text("❌ Enter a valid 10-digit Indian mobile number.")
             return
 
         try:
-            # Open Rooter product page.
             page = await self.browser.open_product_page(slot_id)
 
-            # Explicit second popup check.
             try:
                 await self.browser.handle_location_popup(page)
                 await page.wait_for_timeout(1000)
@@ -476,26 +434,13 @@ class AccountController:
                 last_error=None,
             )
 
-            # Open login popup through profile icon.
             mobile_input = await self._open_login_popup(page)
 
             if mobile_input is None:
-
-                screenshot_path = (
-                    self.screenshots_dir
-                    / f"{slot_id}_login_profile_error.png"
-                )
-
+                screenshot_path = self.screenshots_dir / f"{slot_id}_login_profile_error.png"
                 try:
-                    await page.screenshot(
-                        path=str(screenshot_path),
-                        full_page=False,
-                    )
-
-                    account.update(
-                        last_screenshot=str(screenshot_path)
-                    )
-
+                    await page.screenshot(path=str(screenshot_path), full_page=False)
+                    account.update(last_screenshot=str(screenshot_path))
                     await self.telegram.send_photo(
                         photo_path=str(screenshot_path),
                         caption=(
@@ -505,44 +450,28 @@ class AccountController:
                             f"Page: {page.url}"
                         ),
                     )
-
                 except Exception:
                     pass
+                raise RuntimeError("Rooter Login popup could not be opened from the profile icon.")
 
-                raise RuntimeError(
-                    "Rooter Login popup could not be opened from the profile icon."
-                )
-
-            # Fill mobile number.
             await mobile_input.fill(phone_number)
-
             await page.wait_for_timeout(500)
 
-            # Find Continue / Send OTP.
             send_otp_button = await self._find_send_otp_button(page)
-
             if send_otp_button is None:
-                raise RuntimeError(
-                    "Rooter Continue button was not found."
-                )
+                raise RuntimeError("Rooter Continue button was not found.")
 
             await send_otp_button.click(timeout=5000)
-
-            # Wait for OTP popup.
             otp_inputs = []
 
             for _ in range(30):
                 await page.wait_for_timeout(500)
-
                 otp_inputs = await self._find_otp_inputs(page)
-
                 if otp_inputs:
                     break
 
             if not otp_inputs:
-                raise RuntimeError(
-                    "OTP verification popup did not appear."
-                )
+                raise RuntimeError("OTP verification popup did not appear.")
 
             account.update(
                 current_page="otp_verification",
@@ -558,12 +487,7 @@ class AccountController:
             )
 
         except Exception as exc:
-
-            account.update(
-                last_error=str(exc),
-                active=False,
-            )
-
+            account.update(last_error=str(exc), active=False)
             await update.message.reply_text(
                 "❌ Login start failed\n\n"
                 f"Slot: {slot_id}\n"
@@ -575,13 +499,10 @@ class AccountController:
     # =========================================================
 
     async def handle_otp(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
-
         args = context.args
 
         if len(args) < 2:
-            await update.message.reply_text(
-                "❌ Format:\n/otp S1-A1 123456"
-            )
+            await update.message.reply_text("❌ Format:\n/otp S1-A1 123456")
             return
 
         slot_id = args[0].upper()
@@ -594,78 +515,46 @@ class AccountController:
             return
 
         if len(otp) != 6 or not otp.isdigit():
-            await update.message.reply_text(
-                "❌ OTP must be exactly 6 digits."
-            )
+            await update.message.reply_text("❌ OTP must be exactly 6 digits.")
             return
 
         try:
             page = await self.browser.get_page(slot_id)
-
-            # Close location popup if it appears again.
             await self.browser.handle_location_popup(page)
 
             otp_inputs = []
-
             for _ in range(20):
-
                 otp_inputs = await self._find_otp_inputs(page)
-
                 if otp_inputs:
                     break
-
                 await page.wait_for_timeout(500)
 
             if not otp_inputs:
-                raise RuntimeError(
-                    "OTP input field was not found."
-                )
+                raise RuntimeError("OTP input field was not found.")
 
-            # Single OTP input.
             if len(otp_inputs) == 1:
-
                 await otp_inputs[0].fill(otp)
-
-            # Six separate OTP boxes.
             else:
-
                 boxes = otp_inputs[:6]
-
                 if len(boxes) < 6:
-                    raise RuntimeError(
-                        "OTP fields were found, but six OTP boxes are not available."
-                    )
-
+                    raise RuntimeError("OTP fields were found, but six OTP boxes are not available.")
                 for index, digit in enumerate(otp):
                     await boxes[index].fill(digit)
 
             await page.wait_for_timeout(700)
 
             verify_button = await self._find_verify_button(page)
-
             if verify_button is None:
-                raise RuntimeError(
-                    "Verify Now button was not found."
-                )
+                raise RuntimeError("Verify Now button was not found.")
 
             await verify_button.click(timeout=5000)
-
-            # Wait for Rooter to process login.
             await page.wait_for_timeout(3500)
-
-            # Location popup may appear after successful login.
             await self.browser.handle_location_popup(page)
-
             await page.wait_for_timeout(1000)
 
-            # Ensure final page is Rooter product page.
             page = await self.browser.ensure_product_page(slot_id)
-
             await self.browser.handle_location_popup(page)
-
             await page.wait_for_timeout(1500)
-
-            # Save authenticated browser session.
             await self.browser.save_session(slot_id)
 
             account.update(
@@ -675,20 +564,9 @@ class AccountController:
                 last_error=None,
             )
 
-            # Success screenshot.
-            screenshot_path = (
-                self.screenshots_dir
-                / f"{slot_id}_login_success.png"
-            )
-
-            await page.screenshot(
-                path=str(screenshot_path),
-                full_page=False,
-            )
-
-            account.update(
-                last_screenshot=str(screenshot_path)
-            )
+            screenshot_path = self.screenshots_dir / f"{slot_id}_login_success.png"
+            await page.screenshot(path=str(screenshot_path), full_page=False)
+            account.update(last_screenshot=str(screenshot_path))
 
             await self.telegram.send_photo(
                 photo_path=str(screenshot_path),
@@ -708,11 +586,7 @@ class AccountController:
             )
 
         except Exception as exc:
-
-            account.update(
-                last_error=str(exc)
-            )
-
+            account.update(last_error=str(exc))
             await update.message.reply_text(
                 "❌ OTP/Login failed\n\n"
                 f"Slot: {slot_id}\n"
@@ -724,13 +598,10 @@ class AccountController:
     # =========================================================
 
     async def handle_screen(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
-
         args = context.args
 
         if len(args) < 1:
-            await update.message.reply_text(
-                "❌ Format:\n/screen S1-A1"
-            )
+            await update.message.reply_text("❌ Format:\n/screen S1-A1")
             return
 
         slot_id = args[0].upper()
@@ -743,19 +614,11 @@ class AccountController:
 
         try:
             page = await self.browser.ensure_product_page(slot_id)
-
             await self.browser.handle_location_popup(page)
-
             await page.evaluate("window.scrollTo(0, 0)")
 
-            screenshot_path = (
-                self.screenshots_dir / f"{slot_id}.png"
-            )
-
-            await page.screenshot(
-                path=str(screenshot_path),
-                full_page=False,
-            )
+            screenshot_path = self.screenshots_dir / f"{slot_id}.png"
+            await page.screenshot(path=str(screenshot_path), full_page=False)
 
             account.update(
                 current_page=page.url,
@@ -765,13 +628,11 @@ class AccountController:
 
             await self.telegram.send_photo(
                 photo_path=str(screenshot_path),
-                caption=f"🖥️ {slot_id}\nPage: {page.url}",
+                caption=f"🖥️️ {slot_id}\nPage: {page.url}",
             )
 
         except Exception as exc:
-
             account.update(last_error=str(exc))
-
             await update.message.reply_text(
                 "❌ Screenshot failed\n"
                 f"Slot: {slot_id}\n"
@@ -783,13 +644,10 @@ class AccountController:
     # =========================================================
 
     async def handle_refresh(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
-
         args = context.args
 
         if len(args) < 1:
-            await update.message.reply_text(
-                "❌ Format:\n/refresh S1-A1"
-            )
+            await update.message.reply_text("❌ Format:\n/refresh S1-A1")
             return
 
         slot_id = args[0].upper()
@@ -802,22 +660,12 @@ class AccountController:
 
         try:
             page = await self.browser.get_page(slot_id)
-
-            await page.reload(
-                wait_until="domcontentloaded",
-                timeout=60000,
-            )
-
+            await page.reload(wait_until="domcontentloaded", timeout=60000)
             await self.browser.handle_location_popup(page)
-
             await page.wait_for_timeout(1500)
-
             await page.evaluate("window.scrollTo(0, 0)")
 
-            account.update(
-                current_page=page.url,
-                last_error=None,
-            )
+            account.update(current_page=page.url, last_error=None)
 
             await update.message.reply_text(
                 "🔄 Refreshed\n"
@@ -826,9 +674,7 @@ class AccountController:
             )
 
         except Exception as exc:
-
             account.update(last_error=str(exc))
-
             await update.message.reply_text(
                 "❌ Refresh failed\n"
                 f"Slot: {slot_id}\n"
@@ -840,13 +686,10 @@ class AccountController:
     # =========================================================
 
     async def handle_logout(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
-
         args = context.args
 
         if len(args) < 1:
-            await update.message.reply_text(
-                "❌ Format:\n/logout S1-A1"
-            )
+            await update.message.reply_text("❌ Format:\n/logout S1-A1")
             return
 
         slot_id = args[0].upper()
@@ -879,9 +722,7 @@ class AccountController:
             )
 
         except Exception as exc:
-
             account.update(last_error=str(exc))
-
             await update.message.reply_text(
                 "❌ Logout failed\n"
                 f"Slot: {slot_id}\n"
@@ -893,29 +734,18 @@ class AccountController:
     # =========================================================
 
     async def recover(self, slot_id: str, error_message: str):
-
         try:
             account = self.get_account(slot_id)
             account.update(last_error=error_message)
         except Exception:
             return
 
-        screenshot_path = (
-            self.screenshots_dir
-            / f"{slot_id}_error.png"
-        )
+        screenshot_path = self.screenshots_dir / f"{slot_id}_error.png"
 
         try:
             page = await self.browser.get_page(slot_id)
-
-            await page.screenshot(
-                path=str(screenshot_path),
-                full_page=False,
-            )
-
-            account.update(
-                last_screenshot=str(screenshot_path)
-            )
+            await page.screenshot(path=str(screenshot_path), full_page=False)
+            account.update(last_screenshot=str(screenshot_path))
 
             await self.telegram.send_photo(
                 photo_path=str(screenshot_path),
@@ -925,9 +755,7 @@ class AccountController:
                     f"Error:\n{error_message}"
                 ),
             )
-
         except Exception as screenshot_error:
-
             try:
                 await self.telegram.send_message(
                     "⚠️ RECOVERY\n"
@@ -940,23 +768,10 @@ class AccountController:
 
         try:
             page = await self.browser.open_product_page(slot_id)
-
             await self.browser.handle_location_popup(page)
-
-            account.update(
-                current_page=page.url,
-                last_error=None,
-            )
-
+            account.update(current_page=page.url, last_error=None)
         except Exception as recovery_error:
-
-            account.update(
-                last_error=(
-                    "Recovery failed: "
-                    f"{recovery_error}"
-                )
-            )
-
+            account.update(last_error=f"Recovery failed: {recovery_error}")
             try:
                 await self.telegram.send_message(
                     "❌ Recovery failed\n"
@@ -965,3 +780,93 @@ class AccountController:
                 )
             except Exception:
                 pass
+
+    # =========================================================
+    # 🎯 SNIPER BACKGROUND WORKER
+    # =========================================================
+    async def _sniper_worker(self, slot_id: str):
+        account = self.get_account(slot_id)
+        try:
+            page = await self.browser.ensure_product_page(slot_id)
+            await self.telegram.send_message(f"🎯 Sniper ACTIVATED for {slot_id}. Waiting for stock...")
+
+            while True:
+                # Wait until monitor triggers the event
+                await self.stock_event.wait()
+                
+                account.update(current_page="SNIPER_EXECUTING")
+                
+                # Fast reload because heavy assets are blocked
+                await page.reload(wait_until="domcontentloaded", timeout=15000)
+                await self.browser.handle_location_popup(page)
+
+                # =========================================================
+                # 🛒 BUYING LOGIC
+                # =========================================================
+                try:
+                    # Update these locators with exact Rooter button text/classes
+                    buy_btn = page.get_by_role("button", name="Redeem", exact=False).first
+                    await buy_btn.wait_for(state="visible", timeout=3000)
+                    await buy_btn.click(timeout=3000)
+
+                    confirm_btn = page.get_by_role("button", name="Confirm", exact=False).first
+                    await confirm_btn.wait_for(state="visible", timeout=3000)
+                    await confirm_btn.click(timeout=3000)
+
+                    await self.telegram.send_message(f"✅✅ SUCCESS: Code Bought successfully from {slot_id}!")
+                
+                except Exception as e:
+                    await self.telegram.send_message(f"⚠️ {slot_id} missed the drop or stock not available.")
+
+                # Delay before resetting loop to prevent multiple rapid attempts
+                await asyncio.sleep(5) 
+
+        except Exception as e:
+            await self.telegram.send_message(f"❌ Sniper worker crashed for {slot_id}: {str(e)}")
+            self.sniper_tasks.pop(slot_id, None)
+
+    # =========================================================
+    # START / STOP SNIPER MODE
+    # =========================================================
+    async def handle_sniper_mode(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        args = context.args
+        if len(args) < 1:
+            await update.message.reply_text("❌ Format: /sniper S1-A1 (or 'all')")
+            return
+            
+        target = args[0].lower()
+
+        if target == "all":
+            started = 0
+            for slot_id, acc in self.accounts.items():
+                if acc.logged_in and slot_id not in self.sniper_tasks:
+                    task = asyncio.create_task(self._sniper_worker(slot_id))
+                    self.sniper_tasks[slot_id] = task
+                    started += 1
+            await update.message.reply_text(f"🔫 Sniper started for {started} active accounts!")
+        else:
+            slot_id = target.upper()
+            try:
+                acc = self.get_account(slot_id)
+                if acc.logged_in and slot_id not in self.sniper_tasks:
+                    task = asyncio.create_task(self._sniper_worker(slot_id))
+                    self.sniper_tasks[slot_id] = task
+                    await update.message.reply_text(f"🔫 Sniper started for {slot_id}")
+                elif not acc.logged_in:
+                    await update.message.reply_text(f"⚠️ {slot_id} is not logged in.")
+                else:
+                    await update.message.reply_text(f"⚠️ Sniper already running for {slot_id}.")
+            except ValueError as exc:
+                await update.message.reply_text(f"❌ {exc}")
+
+    # =========================================================
+    # FIRE THE SNIPERS
+    # =========================================================
+    async def trigger_stock_buy(self):
+        self.stock_event.set()
+        await asyncio.sleep(3)
+        self.stock_event.clear()
+
+    async def handle_trigger_buy(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        await update.message.reply_text("🚨 MANUAL TRIGGER SENT! All snipers firing!")
+        await self.trigger_stock_buy()
