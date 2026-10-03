@@ -285,150 +285,174 @@ class AccountController:
     # OPEN LOGIN POPUP
     # =========================================================
 
-    async def _open_login_popup(
-        self,
-        page,
-    ):
+    async def _open_login_popup(self, page: Page) -> bool:
+    """
+    Rooter login flow:
+    Top-right has exactly two important icon buttons:
+      LEFT  = Wallet
+      RIGHT = Profile
 
-        # -----------------------------------------------------
-        # First: if mobile field is already visible,
-        # login popup is already open.
-        # -----------------------------------------------------
+    Always target the right-side profile control.
+    """
 
-        mobile_input = await self._find_mobile_input(
-            page
-        )
-
-        if mobile_input is not None:
-            return mobile_input
-
-        # -----------------------------------------------------
-        # Known login/profile text
-        # -----------------------------------------------------
-
-        candidates = [
-            page.get_by_text(
-                "Login / Sign Up",
-                exact=True,
-            ),
-            page.get_by_text(
-                "Login",
-                exact=True,
-            ),
-            page.get_by_text(
-                "Sign Up",
-                exact=True,
-            ),
+    async def login_popup_open() -> bool:
+        selectors = [
+            'input[type="tel"]',
+            'input[inputmode="tel"]',
+            'input[autocomplete="tel"]',
+            'input[name*="mobile" i]',
+            'input[name*="phone" i]',
         ]
 
-        for candidate in candidates:
+        for selector in selectors:
+            locator = page.locator(selector)
 
-            try:
-
-                count = await candidate.count()
-
-                for index in range(count):
-
-                    item = candidate.nth(index)
-
-                    if await item.is_visible(
-                        timeout=500
+            for i in range(await locator.count()):
+                try:
+                    if await locator.nth(i).is_visible(
+                        timeout=300
                     ):
+                        return True
+                except Exception:
+                    pass
 
-                        await item.click(
-                            timeout=5000
-                        )
+        return False
 
-                        await page.wait_for_timeout(
-                            1000
-                        )
+    # Already open?
+    if await login_popup_open():
+        return True
 
-                        mobile_input = (
-                            await self._find_mobile_input(
-                                page
-                            )
-                        )
+    # ---------------------------------------------------------
+    # Find top-right controls only
+    # ---------------------------------------------------------
 
-                        if mobile_input is not None:
-                            return mobile_input
+    controls = page.locator(
+        "header button, "
+        "header [role='button'], "
+        "header a"
+    )
 
-            except Exception:
+    candidates = []
+
+    for i in range(await controls.count()):
+
+        try:
+            element = controls.nth(i)
+
+            if not await element.is_visible(timeout=300):
                 continue
 
-        # -----------------------------------------------------
-        # Profile/account icon
-        #
-        # Rooter desktop header:
-        # wallet icon -> profile icon
-        #
-        # Try semantic attributes first.
-        # -----------------------------------------------------
+            box = await element.bounding_box()
 
-        profile_selectors = [
-            '[aria-label*="profile" i]',
-            '[aria-label*="account" i]',
-            '[aria-label*="login" i]',
-            '[title*="profile" i]',
-            '[title*="account" i]',
-            '[title*="login" i]',
-            'img[alt*="profile" i]',
-            'img[alt*="avatar" i]',
-            'img[alt*="account" i]',
-        ]
+            if not box:
+                continue
 
-        for selector in profile_selectors:
+            x = box["x"]
+            y = box["y"]
+            width = box["width"]
+            height = box["height"]
+
+            # Only small icon-like controls near top-right.
+            if y > 150:
+                continue
+
+            if width > 100 or height > 100:
+                continue
+
+            # Must actually be near the right side.
+            viewport_width = await page.evaluate(
+                "window.innerWidth"
+            )
+
+            if x < viewport_width * 0.65:
+                continue
+
+            aria = (
+                await element.get_attribute("aria-label")
+                or ""
+            ).lower()
+
+            title = (
+                await element.get_attribute("title")
+                or ""
+            ).lower()
+
+            cls = (
+                await element.get_attribute("class")
+                or ""
+            ).lower()
+
+            text = ""
 
             try:
+                text = (
+                    await element.inner_text(
+                        timeout=200
+                    )
+                ).strip().lower()
+            except Exception:
+                pass
 
-                locator = page.locator(
-                    selector
+            info = f"{aria} {title} {cls} {text}"
+
+            # Never choose wallet.
+            if any(word in info for word in [
+                "wallet",
+                "balance",
+                "credit",
+                "coin",
+            ]):
+                continue
+
+            # Profile/account is a direct match.
+            profile_score = 0
+
+            if any(word in info for word in [
+                "profile",
+                "account",
+                "avatar",
+                "user",
+            ]):
+                profile_score += 100
+
+            # Rightmost controls get priority.
+            profile_score += int(x)
+
+            candidates.append(
+                (
+                    profile_score,
+                    x,
+                    element,
                 )
+            )
 
-                count = await locator.count()
+        except Exception:
+            continue
 
-                for index in range(count):
+    # Rightmost/profile candidate first.
+    candidates.sort(
+        key=lambda item: item[0],
+        reverse=True,
+    )
 
-                    item = locator.nth(index)
+    for _, _, element in candidates:
 
-                    if not await item.is_visible(
-                        timeout=500
-                    ):
-                        continue
+        try:
+            await element.scroll_into_view_if_needed()
 
-                    try:
+            await element.click(
+                timeout=5000
+            )
 
-                        await item.click(
-                            timeout=5000
-                        )
+            await page.wait_for_timeout(1200)
 
-                    except Exception:
+            if await login_popup_open():
+                return True
 
-                        try:
+        except Exception:
+            continue
 
-                            await item.locator(
-                                ".."
-                            ).click(
-                                timeout=3000
-                            )
-
-                        except Exception:
-                            continue
-
-                    await page.wait_for_timeout(
-                        1000
-                    )
-
-                    mobile_input = (
-                        await self._find_mobile_input(
-                            page
-                        )
-                    )
-
-                    if mobile_input is not None:
-                        return mobile_input
-
-            except Exception:
-                continue
+    return False
 
         # -----------------------------------------------------
         # Desktop header fallback
