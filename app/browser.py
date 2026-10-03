@@ -95,18 +95,6 @@ class BrowserManager:
                 **options,
             )
 
-        # =========================================================
-        # 🚀 RAM & SPEED OPTIMIZATION: BLOCK HEAVY RESOURCES
-        # =========================================================
-        async def intercept_route(route):
-            if route.request.resource_type in ["image", "media", "font", "stylesheet"]:
-                await route.abort()
-            else:
-                await route.continue_()
-
-        await context.route("**/*", intercept_route)
-        # =========================================================
-
         self.contexts[slot_id] = context
 
         return context
