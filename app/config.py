@@ -1,7 +1,6 @@
 import os
 from dataclasses import dataclass
 
-
 @dataclass(frozen=True)
 class Settings:
     product_url: str = os.getenv(
@@ -12,7 +11,8 @@ class Settings:
     telegram_bot_token: str = os.getenv("TELEGRAM_BOT_TOKEN", "")
     telegram_chat_id: str = os.getenv("TELEGRAM_CHAT_ID", "")
 
-    services: int = 5
+    # Konsi service chal rahi hai (1 se 5 tak)
+    current_service_id: int = int(os.getenv("CURRENT_SERVICE_ID", "1"))
     accounts_per_service: int = 5
 
     monitor_interval_seconds: int = 600
@@ -29,7 +29,6 @@ class Settings:
 
     @property
     def total_slots(self) -> int:
-        return self.services * self.accounts_per_service
-
+        return self.accounts_per_service
 
 settings = Settings()
