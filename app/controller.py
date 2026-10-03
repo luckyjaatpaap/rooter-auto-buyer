@@ -40,10 +40,12 @@ class AccountController:
     # =========================================================
 
     def _create_slots(self):
-        for service_number in range(1, settings.services + 1):
-            for account_number in range(1, settings.accounts_per_service + 1):
-                slot_id = f"S{service_number}-A{account_number}"
-                self.accounts[slot_id] = AccountState(slot_id=slot_id)
+        # Ye sirf apne specific service ID ke accounts banayega
+        service_number = settings.current_service_id
+        for account_number in range(1, settings.accounts_per_service + 1):
+            slot_id = f"S{service_number}-A{account_number}"
+            self.accounts[slot_id] = AccountState(slot_id=slot_id)
+
 
     def get_account(self, slot_id: str) -> AccountState:
         account = self.accounts.get(slot_id)
