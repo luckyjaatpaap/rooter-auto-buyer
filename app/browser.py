@@ -95,6 +95,18 @@ class BrowserManager:
                 **options,
             )
 
+        # =========================================================
+        # 🚀 RAM & SPEED OPTIMIZATION: BLOCK HEAVY RESOURCES
+        # =========================================================
+        async def intercept_route(route):
+            if route.request.resource_type in ["image", "media", "font", "stylesheet"]:
+                await route.abort()
+            else:
+                await route.continue_()
+
+        await context.route("**/*", intercept_route)
+        # =========================================================
+
         self.contexts[slot_id] = context
 
         return context
@@ -126,12 +138,7 @@ class BrowserManager:
 
         try:
 
-            # Give Rooter a moment to render the popup.
             await page.wait_for_timeout(800)
-
-            # -------------------------------------------------
-            # Exact Rooter option
-            # -------------------------------------------------
 
             locator = page.get_by_text(
                 "No, stay on this site",
@@ -141,113 +148,50 @@ class BrowserManager:
             count = await locator.count()
 
             for index in range(count):
-
                 try:
-
                     element = locator.nth(index)
-
-                    if await element.is_visible(
-                        timeout=1000
-                    ):
-
-                        await element.click(
-                            timeout=5000
-                        )
-
-                        await page.wait_for_timeout(
-                            1000
-                        )
-
+                    if await element.is_visible(timeout=1000):
+                        await element.click(timeout=5000)
+                        await page.wait_for_timeout(1000)
                         return True
-
                 except Exception:
                     continue
 
-            # -------------------------------------------------
-            # Button containing the exact option
-            # -------------------------------------------------
-
-            buttons = page.locator(
-                "button"
-            )
-
+            buttons = page.locator("button")
             button_count = await buttons.count()
 
             for index in range(button_count):
-
                 try:
-
                     button = buttons.nth(index)
-
-                    if not await button.is_visible(
-                        timeout=500
-                    ):
+                    if not await button.is_visible(timeout=500):
                         continue
 
-                    text = (
-                        await button.inner_text(
-                            timeout=1000
-                        )
-                    )
+                    text = await button.inner_text(timeout=1000)
+                    text = " ".join(text.split()).strip().lower()
 
-                    text = " ".join(
-                        text.split()
-                    ).strip().lower()
-
-                    if text == (
-                        "no, stay on this site"
-                    ):
-
-                        await button.click(
-                            timeout=5000
-                        )
-
-                        await page.wait_for_timeout(
-                            1000
-                        )
-
+                    if text == "no, stay on this site":
+                        await button.click(timeout=5000)
+                        await page.wait_for_timeout(1000)
                         return True
-
                 except Exception:
                     continue
 
-            # -------------------------------------------------
-            # Generic clickable element fallback
-            # -------------------------------------------------
-
-            locator = page.locator(
-                "text=No, stay on this site"
-            )
-
+            locator = page.locator("text=No, stay on this site")
             count = await locator.count()
 
             for index in range(count):
-
                 try:
-
                     element = locator.nth(index)
-
-                    if await element.is_visible(
-                        timeout=500
-                    ):
-
-                        await element.click(
-                            timeout=5000
-                        )
-
-                        await page.wait_for_timeout(
-                            1000
-                        )
-
+                    if await element.is_visible(timeout=500):
+                        await element.click(timeout=5000)
+                        await page.wait_for_timeout(1000)
                         return True
-
                 except Exception:
                     continue
 
             return False
 
         except Exception:
-            # Popup handling must never crash the browser.
             return False
 
     # =========================================================
@@ -259,9 +203,7 @@ class BrowserManager:
         slot_id: str,
     ) -> Page:
 
-        page = await self.get_page(
-            slot_id
-        )
+        page = await self.get_page(slot_id)
 
         await page.goto(
             settings.product_url,
@@ -269,18 +211,9 @@ class BrowserManager:
             timeout=60000,
         )
 
-        # Handle Rooter location popup
-        await self.handle_location_popup(
-            page
-        )
-
-        await page.wait_for_timeout(
-            2000
-        )
-
-        await page.evaluate(
-            "window.scrollTo(0, 0)"
-        )
+        await self.handle_location_popup(page)
+        await page.wait_for_timeout(2000)
+        await page.evaluate("window.scrollTo(0, 0)")
 
         return page
 
@@ -293,38 +226,20 @@ class BrowserManager:
         slot_id: str,
     ) -> Page:
 
-        page = await self.get_page(
-            slot_id
-        )
-
+        page = await self.get_page(slot_id)
         current_url = page.url or ""
 
-        product_path = (
-            "shop.rooter.gg/product/"
-            "playstation-gift-cards"
-        )
+        product_path = "shop.rooter.gg/product/playstation-gift-cards"
 
         if (
             not current_url
             or current_url == "about:blank"
             or product_path not in current_url
         ):
-
-            page = await self.open_product_page(
-                slot_id
-            )
-
+            page = await self.open_product_page(slot_id)
         else:
-
-            # Handle popup even when already
-            # on the product page.
-            await self.handle_location_popup(
-                page
-            )
-
-            await page.evaluate(
-                "window.scrollTo(0, 0)"
-            )
+            await self.handle_location_popup(page)
+            await page.evaluate("window.scrollTo(0, 0)")
 
         return page
 
@@ -337,26 +252,14 @@ class BrowserManager:
         slot_id: str,
     ):
 
-        context = self.contexts.get(
-            slot_id
-        )
-
+        context = self.contexts.get(slot_id)
         if context is None:
             return
 
-        session_dir = (
-            self.sessions.session_path(
-                slot_id
-            )
-        )
+        session_dir = self.sessions.session_path(slot_id)
+        storage_file = session_dir / "storage_state.json"
 
-        storage_file = (
-            session_dir / "storage_state.json"
-        )
-
-        await context.storage_state(
-            path=str(storage_file)
-        )
+        await context.storage_state(path=str(storage_file))
 
     # =========================================================
     # CLOSE SLOT
@@ -367,11 +270,7 @@ class BrowserManager:
         slot_id: str,
     ):
 
-        context = self.contexts.pop(
-            slot_id,
-            None,
-        )
-
+        context = self.contexts.pop(slot_id, None)
         if context is None:
             return
 
@@ -386,13 +285,8 @@ class BrowserManager:
         slot_id: str,
     ):
 
-        await self.close_slot(
-            slot_id
-        )
-
-        self.sessions.delete_session(
-            slot_id
-        )
+        await self.close_slot(slot_id)
+        self.sessions.delete_session(slot_id)
 
     # =========================================================
     # CLOSE EVERYTHING
@@ -400,22 +294,13 @@ class BrowserManager:
 
     async def close(self):
 
-        for slot_id in list(
-            self.contexts.keys()
-        ):
-
-            await self.close_slot(
-                slot_id
-            )
+        for slot_id in list(self.contexts.keys()):
+            await self.close_slot(slot_id)
 
         if self.browser is not None:
-
             await self.browser.close()
-
             self.browser = None
 
         if self.playwright is not None:
-
             await self.playwright.stop()
-
             self.playwright = None
