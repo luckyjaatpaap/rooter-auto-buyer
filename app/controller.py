@@ -791,7 +791,7 @@ class AccountController:
                 )
             except Exception:
                 pass
-
+    
     # =========================================================
     # 🎯 SNIPER BACKGROUND WORKER (2 MIN AUTO-REFRESH & SMART RETRY)
     # =========================================================
@@ -807,7 +807,6 @@ class AccountController:
             while True:
                 # 1. 2 Minute Wait ya Manual Trigger
                 try:
-                    # 120 seconds (2 mins) ka timeout lagaya hai
                     await asyncio.wait_for(self.stock_event.wait(), timeout=120.0)
                     self.stock_event.clear() 
                 except asyncio.TimeoutError:
@@ -820,18 +819,23 @@ class AccountController:
                     await page.reload(wait_until="domcontentloaded", timeout=15000)
                     await self.browser.handle_location_popup(page)
                     
-                    # 3. 5000 Wala Code Select Karna
-                    rs_5000_option = page.locator("text=/Rs\\.?\\s*5000/i").first
-                    await rs_5000_option.wait_for(state="visible", timeout=8000)
-                    await rs_5000_option.click(timeout=3000)
-                    await page.wait_for_timeout(1500) # Options load hone ka wait
+                    # 3. 5000 Wala Code Force Select Karna
+                    try:
+                        # Image ke hisaab se exact text "Rs.5000 Wallet Code" match kar rahe hain
+                        rs_5000_option = page.locator("text=Rs.5000 Wallet Code").first
+                        await rs_5000_option.wait_for(state="visible", timeout=8000)
+                        # Force click use kar rahe hain taaki koi chota mota overlay block na kare
+                        await rs_5000_option.click(force=True, timeout=3000)
+                        await page.wait_for_timeout(2000) # Button render hone ka properly wait
+                    except Exception as e:
+                        pass # Agar card load nahi hua, toh skip karke agle cycle me dekhega
                     
                     # 4. Check karna ki Stock hai ya nahi (Pay via wallet button check)
                     pay_btn_1 = page.get_by_role("button", name="Pay via wallet").first
-                    is_in_stock = await pay_btn_1.is_visible(timeout=2000)
+                    is_in_stock = await pay_btn_1.is_visible(timeout=3000)
                     
                     if not is_in_stock:
-                        # Stock nahi hai (Out of stock hai), loop continue karke 2 min baad fir try karega
+                        # Out of stock hai, loop continue karke 2 min baad fir try karega
                         continue
 
                     # ==========================================
@@ -846,10 +850,10 @@ class AccountController:
                             if target_qty == 1:
                                 await page.reload(wait_until="domcontentloaded", timeout=15000)
                                 await self.browser.handle_location_popup(page)
-                                rs_5000_option = page.locator("text=/Rs\\.?\\s*5000/i").first
+                                rs_5000_option = page.locator("text=Rs.5000 Wallet Code").first
                                 await rs_5000_option.wait_for(state="visible", timeout=8000)
-                                await rs_5000_option.click(timeout=3000)
-                                await page.wait_for_timeout(1500)
+                                await rs_5000_option.click(force=True, timeout=3000)
+                                await page.wait_for_timeout(2000)
                                 pay_btn_1 = page.get_by_role("button", name="Pay via wallet").first
 
                             # Qty 2 ke liye '+' dabao
@@ -858,7 +862,7 @@ class AccountController:
                                     plus_btn = page.locator("button:has-text('+')").first
                                     await plus_btn.wait_for(state="visible", timeout=3000)
                                     await plus_btn.click(timeout=2000)
-                                    await page.wait_for_timeout(1000) 
+                                    await page.wait_for_timeout(1500) 
                                 except Exception:
                                     pass
                             
@@ -897,7 +901,7 @@ class AccountController:
 
                             # Delivery Popup Wait
                             await page.locator("text=Delivery Details").wait_for(state="visible", timeout=6000)
-                            await page.wait_for_timeout(1000)
+                            await page.wait_for_timeout(1500)
 
                             # Second Pay Button (Delivery Popup me)
                             pay_btn_2 = page.get_by_role("button", name="Pay via wallet").last
@@ -948,6 +952,7 @@ class AccountController:
         except Exception as e:
             await self.telegram.send_message(f"❌ Sniper worker critically crashed for {slot_id}: {str(e)}")
             self.sniper_tasks.pop(slot_id, None)
+
 
     # =========================================================
     # START / STOP SNIPER MODE
