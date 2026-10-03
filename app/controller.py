@@ -450,6 +450,10 @@ class AccountController:
                             f"Page: {page.url}"
                         ),
                     )
+                    # 🧹 Delete screenshot after sending
+                    if screenshot_path.exists():
+                        screenshot_path.unlink()
+                        
                 except Exception:
                     pass
                 raise RuntimeError("Rooter Login popup could not be opened from the profile icon.")
@@ -577,6 +581,10 @@ class AccountController:
                     "Session saved."
                 ),
             )
+            
+            # 🧹 Delete screenshot after sending
+            if screenshot_path.exists():
+                screenshot_path.unlink()
 
             await update.message.reply_text(
                 "✅ Login successful\n\n"
@@ -628,8 +636,12 @@ class AccountController:
 
             await self.telegram.send_photo(
                 photo_path=str(screenshot_path),
-                caption=f"🖥️️ {slot_id}\nPage: {page.url}",
+                caption=f"🖥 {slot_id}\nPage: {page.url}",
             )
+            
+            # 🧹 Delete screenshot after sending
+            if screenshot_path.exists():
+                screenshot_path.unlink()
 
         except Exception as exc:
             account.update(last_error=str(exc))
@@ -755,6 +767,11 @@ class AccountController:
                     f"Error:\n{error_message}"
                 ),
             )
+            
+            # 🧹 Delete screenshot after sending
+            if screenshot_path.exists():
+                screenshot_path.unlink()
+
         except Exception as screenshot_error:
             try:
                 await self.telegram.send_message(
@@ -796,12 +813,12 @@ class AccountController:
                 
                 account.update(current_page="SNIPER_EXECUTING")
                 
-                # Fast reload because heavy assets are blocked
+                # Fast reload
                 await page.reload(wait_until="domcontentloaded", timeout=15000)
                 await self.browser.handle_location_popup(page)
 
                 # =========================================================
-                # 🛒 BUYING LOGIC
+                # 🛒 BUYING LOGIC (Update specific locators here)
                 # =========================================================
                 try:
                     # Update these locators with exact Rooter button text/classes
