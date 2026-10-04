@@ -40,12 +40,11 @@ class AccountController:
     # =========================================================
 
     def _create_slots(self):
-        # Ye sirf apne specific service ID ke accounts banayega
+        # Ye settings.current_service_id se apni specific service ke 5 accounts banayega
         service_number = settings.current_service_id
         for account_number in range(1, settings.accounts_per_service + 1):
             slot_id = f"S{service_number}-A{account_number}"
             self.accounts[slot_id] = AccountState(slot_id=slot_id)
-
 
     def get_account(self, slot_id: str) -> AccountState:
         account = self.accounts.get(slot_id)
@@ -83,7 +82,7 @@ class AccountController:
             "🤖 Rooter Auto Buyer\n\n"
             "System online.\n"
             f"Total slots: {settings.total_slots}\n"
-            f"Services: {settings.services}\n"
+            f"Current Service ID: {settings.current_service_id}\n"
             f"Accounts/service: {settings.accounts_per_service}\n\n"
             "Use /status to check slots."
         )
@@ -649,7 +648,7 @@ class AccountController:
             )
 
     # =========================================================
-    # REFRESH
+    # REFRESH (UPDATED FOR WHITE SCREEN FIX)
     # =========================================================
 
     async def handle_refresh(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -669,7 +668,8 @@ class AccountController:
 
         try:
             page = await self.browser.get_page(slot_id)
-            await page.reload(wait_until="domcontentloaded", timeout=60000)
+            # Safe navigation jisse front-end react exceptions solve ho jayen
+            await page.goto(settings.product_url, wait_until="domcontentloaded", timeout=60000)
             await self.browser.handle_location_popup(page)
             await page.wait_for_timeout(1500)
             await page.evaluate("window.scrollTo(0, 0)")
@@ -677,7 +677,7 @@ class AccountController:
             account.update(current_page=page.url, last_error=None)
 
             await update.message.reply_text(
-                "🔄 Refreshed\n"
+                "🔄 Refreshed Cleanly\n"
                 f"Slot: {slot_id}\n"
                 f"Page: {page.url}"
             )
@@ -793,9 +793,9 @@ class AccountController:
                 )
             except Exception:
                 pass
-    
+
     # =========================================================
-    # 🎯 SNIPER BACKGROUND WORKER (2 MIN AUTO-REFRESH & SMART RETRY)
+    # 🎯 SNIPER BACKGROUND WORKER (CRASH FIX & CLEAN CLICK)
     # =========================================================
     async def _sniper_worker(self, slot_id: str):
         from datetime import datetime
@@ -817,27 +817,34 @@ class AccountController:
                 account.update(current_page="CHECKING_STOCK")
                 
                 try:
-                    # 2. Page Reload aur Popup Handle
-                    await page.reload(wait_until="domcontentloaded", timeout=15000)
+                    # 2. Fresh Load to prevent React Client-Side Exceptions
+                    await page.goto(settings.product_url, wait_until="domcontentloaded", timeout=30000)
                     await self.browser.handle_location_popup(page)
+                    await page.wait_for_timeout(1000)
+
+                    # Check if page is broken (White Screen)
+                    content = await page.content()
+                    if "Application error: a client-side exception" in content:
+                        await self.telegram.send_message(f"⚠️ Website crashed for {slot_id}. Retrying in next loop...")
+                        await asyncio.sleep(5)
+                        continue
                     
-                    # 3. 5000 Wala Code Force Select Karna (Exact Match Logic)
+                    # 3. Safe Click on 5000 Wallet Code
                     try:
-                        # Exact text match taaki 1000 ya 2000 galti se select na ho
-                        rs_5000_option = page.get_by_text("Rs.5000 Wallet Code", exact=True).first
+                        rs_5000_option = page.locator("text=Rs.5000 Wallet Code").first
                         await rs_5000_option.wait_for(state="visible", timeout=8000)
-                        # Force click element ke exact center par hoga
-                        await rs_5000_option.click(force=True, timeout=3000)
-                        await page.wait_for_timeout(2000) # Selection highlight hone ka wait
-                    except Exception as e:
-                        pass # Agar card DOM me render nahi hua, toh skip
+                        # Normal click bina force ke taaki website break na ho
+                        await rs_5000_option.click(timeout=3000)
+                        await page.wait_for_timeout(1500)
+                    except Exception:
+                        pass # Ignore and continue if element not found this cycle
                     
-                    # 4. Check karna ki Stock hai ya nahi
+                    # 4. Check karna ki Stock hai ya nahi (Pay via wallet button aana chahiye)
                     pay_btn_1 = page.get_by_role("button", name="Pay via wallet").first
                     is_in_stock = await pay_btn_1.is_visible(timeout=3000)
                     
                     if not is_in_stock:
-                        # Out of stock hai, loop continue karega
+                        # Out of stock hai, loop wapas 2 min wait par chala jayega
                         continue
 
                     # ==========================================
@@ -845,22 +852,24 @@ class AccountController:
                     # ==========================================
                     await self.telegram.send_message(f"🚨 STOCK DETECTED in {slot_id}! Starting auto-buy...")
                     
-                    # Retry Loop
                     for target_qty in [2, 1]:
                         try:
-                            # Agar Qty 1 ka retry hai, refresh karke dobara exact 5000 pakdo
+                            # 1 Qty retry fresh load
                             if target_qty == 1:
-                                await page.reload(wait_until="domcontentloaded", timeout=15000)
+                                await page.goto(settings.product_url, wait_until="domcontentloaded", timeout=30000)
                                 await self.browser.handle_location_popup(page)
                                 
-                                rs_5000_option = page.get_by_text("Rs.5000 Wallet Code", exact=True).first
-                                await rs_5000_option.wait_for(state="visible", timeout=8000)
-                                await rs_5000_option.click(force=True, timeout=3000)
-                                await page.wait_for_timeout(2000)
+                                try:
+                                    rs_5000_option = page.locator("text=Rs.5000 Wallet Code").first
+                                    await rs_5000_option.wait_for(state="visible", timeout=8000)
+                                    await rs_5000_option.click(timeout=3000)
+                                    await page.wait_for_timeout(1500)
+                                except Exception:
+                                    pass
                                 
                                 pay_btn_1 = page.get_by_role("button", name="Pay via wallet").first
 
-                            # Qty 2 ke liye '+' dabao
+                            # Qty 2 '+' click
                             if target_qty == 2:
                                 try:
                                     plus_btn = page.locator("button:has-text('+')").first
@@ -870,7 +879,7 @@ class AccountController:
                                 except Exception:
                                     pass
                             
-                            # Wallet Balance Extract Karna
+                            # Balance check
                             wallet_balance_text = "Balance info not found"
                             try:
                                 balance_locator = page.locator("text=/Wallet Balance:/i").first
@@ -879,7 +888,7 @@ class AccountController:
                             except Exception:
                                 pass
 
-                            # SS Bhejna Balance Ke Sath
+                            # Screenshot
                             screenshot_path = self.screenshots_dir / f"{slot_id}_pre_buy_qty_{target_qty}.png"
                             await page.screenshot(path=str(screenshot_path), full_page=False)
                             
@@ -894,25 +903,21 @@ class AccountController:
                             if screenshot_path.exists():
                                 screenshot_path.unlink()
 
-                            # Insufficient Balance Check
                             if "insufficient" in wallet_balance_text.lower() or "add money" in wallet_balance_text.lower():
-                                await self.telegram.send_message(f"🚨 INSUFFICIENT BALANCE in {slot_id}. Buy completely stopped.")
+                                await self.telegram.send_message(f"🚨 INSUFFICIENT BALANCE in {slot_id}. Buy stopped.")
                                 break 
                                 
-                            # First Pay Button
+                            # Payment flow
                             await pay_btn_1.wait_for(state="visible", timeout=5000)
                             await pay_btn_1.click(timeout=3000)
 
-                            # Delivery Popup Wait
                             await page.locator("text=Delivery Details").wait_for(state="visible", timeout=6000)
                             await page.wait_for_timeout(1500)
 
-                            # Second Pay Button
                             pay_btn_2 = page.get_by_role("button", name="Pay via wallet").last
                             await pay_btn_2.wait_for(state="visible", timeout=5000)
                             await pay_btn_2.click(timeout=3000)
 
-                            # Success Report
                             current_time = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
                             await self.telegram.send_message(
                                 f"✅✅ SUCCESS: CODE PURCHASED!\n\n"
@@ -925,7 +930,6 @@ class AccountController:
                             break 
 
                         except Exception as e:
-                            # Error Handling
                             error_ss = self.screenshots_dir / f"{slot_id}_error_qty_{target_qty}.png"
                             try:
                                 await page.screenshot(path=str(error_ss), full_page=False)
@@ -941,12 +945,11 @@ class AccountController:
                             if target_qty == 2:
                                 await self.telegram.send_message(f"🔄 {slot_id} retrying with Quantity 1...")
                             else:
-                                await self.telegram.send_message(f"❌ {slot_id} completely failed for this drop.")
+                                await self.telegram.send_message(f"❌ {slot_id} failed completely.")
 
-                    # Wapas reset
                     await self.telegram.send_message(f"⏳ {slot_id} purchase cycle complete. Resuming 2-min auto-refresh...")
                     await asyncio.sleep(10)
-                    await page.goto(settings.product_url)
+                    await page.goto(settings.product_url, wait_until="domcontentloaded")
                     await self.browser.handle_location_popup(page)
                     await asyncio.sleep(2) 
 
@@ -956,8 +959,6 @@ class AccountController:
         except Exception as e:
             await self.telegram.send_message(f"❌ Sniper worker critically crashed for {slot_id}: {str(e)}")
             self.sniper_tasks.pop(slot_id, None)
-
-
 
     # =========================================================
     # START / STOP SNIPER MODE
