@@ -790,7 +790,7 @@ class AccountController:
                 pass
 
     # =========================================================
-    # 🎯 SNIPER BACKGROUND WORKER (1 MIN AUTO-REFRESH & UNCONDITIONAL CLICK)
+    # 🎯 SNIPER BACKGROUND WORKER (BULLETPROOF VISIBILITY & JS CLICK)
     # =========================================================
     async def _sniper_worker(self, slot_id: str):
         from datetime import datetime
@@ -799,7 +799,7 @@ class AccountController:
         
         try:
             page = await self.browser.ensure_product_page(slot_id)
-            await self.telegram.send_message(f"🎯 Sniper ACTIVATED for {slot_id}. Auto-refreshing every 1 min...")
+            await self.telegram.send_message(f"🎯 Sniper ACTIVATED for {slot_id}. 1-min Auto-Refresh (Strict Mode) running...")
 
             while True:
                 # 1. 1 Minute Wait ya Manual Trigger
@@ -815,7 +815,7 @@ class AccountController:
                     # 2. Fresh Load to prevent React Client-Side Exceptions
                     await page.goto(settings.product_url, wait_until="domcontentloaded", timeout=30000)
                     await self.browser.handle_location_popup(page)
-                    await page.wait_for_timeout(1000)
+                    await page.wait_for_timeout(2000) # Thoda extra wait taaki elements properly render ho jayein
 
                     content = await page.content()
                     if "Application error: a client-side exception" in content:
@@ -823,27 +823,34 @@ class AccountController:
                         await asyncio.sleep(5)
                         continue
                     
-                    # 3. Unconditional Click on 5000 Wallet Code
-                    try:
-                        rs_5000_option = page.locator("text=Rs.5000 Wallet Code").first
-                        await rs_5000_option.wait_for(state="visible", timeout=8000)
-                        
-                        # Click the text directly
-                        await rs_5000_option.click(force=True, timeout=3000)
-                        await page.wait_for_timeout(1000)
-                        
-                        # Click its parent container to ensure the box is selected
-                        await rs_5000_option.locator("..").click(force=True, timeout=3000)
-                        await page.wait_for_timeout(2000)
-                    except Exception:
-                        pass # Ignore if element completely fails to render, will try next minute
+                    # 3. BULLETPROOF CLICK ON 5000 (Visible Only + JS Fallback)
+                    # >> visible=true ensures hum hidden mobile elements par click nahi kar rahe
+                    rs_5000_locator = page.locator("text=Rs.5000 Wallet Code >> visible=true")
                     
-                    # 4. Check karna ki Stock hai ya nahi (Pay via wallet button aana chahiye)
-                    pay_btn_1 = page.locator("button:has-text('Pay via wallet')").first
+                    if await rs_5000_locator.count() > 0:
+                        target_element = rs_5000_locator.first
+                        try:
+                            # Direct Playwright click
+                            await target_element.click(force=True, timeout=3000)
+                            await page.wait_for_timeout(500)
+                            # JS forced click on parent container (React UI bypass)
+                            await target_element.evaluate("(el) => { if(el.parentElement) el.parentElement.click(); }")
+                            await page.wait_for_timeout(1500)
+                        except Exception:
+                            pass
+                    else:
+                        # Fallback agar Rooter ne text thoda change kiya ho
+                        fallback_loc = page.locator("text=5000 >> visible=true")
+                        if await fallback_loc.count() > 0:
+                            await fallback_loc.last.click(force=True, timeout=3000)
+                            await fallback_loc.last.evaluate("(el) => { if(el.parentElement) el.parentElement.click(); }")
+                            await page.wait_for_timeout(1500)
+                    
+                    # 4. Check Stock by checking ONLY VISIBLE Pay button
+                    pay_btn_1 = page.locator("button >> text='Pay via wallet' >> visible=true").first
                     is_in_stock = await pay_btn_1.is_visible(timeout=3000)
                     
                     if not is_in_stock:
-                        # Out of stock hai, loop wapas 1 min wait par chala jayega
                         continue
 
                     # ==========================================
@@ -857,25 +864,23 @@ class AccountController:
                             if target_qty == 1:
                                 await page.goto(settings.product_url, wait_until="domcontentloaded", timeout=30000)
                                 await self.browser.handle_location_popup(page)
+                                await page.wait_for_timeout(2000)
                                 
-                                try:
-                                    rs_5000_option = page.locator("text=Rs.5000 Wallet Code").first
-                                    await rs_5000_option.wait_for(state="visible", timeout=8000)
-                                    await rs_5000_option.click(force=True, timeout=3000)
-                                    await page.wait_for_timeout(1000)
-                                    await rs_5000_option.locator("..").click(force=True, timeout=3000)
-                                    await page.wait_for_timeout(2000)
-                                except Exception:
-                                    pass
+                                rs_5000_loc = page.locator("text=Rs.5000 Wallet Code >> visible=true")
+                                if await rs_5000_loc.count() > 0:
+                                    await rs_5000_loc.first.click(force=True)
+                                    await rs_5000_loc.first.evaluate("(el) => { if(el.parentElement) el.parentElement.click(); }")
+                                    await page.wait_for_timeout(1500)
                                 
-                                pay_btn_1 = page.locator("button:has-text('Pay via wallet')").first
+                                pay_btn_1 = page.locator("button >> text='Pay via wallet' >> visible=true").first
 
-                            # Qty 2 '+' click
+                            # Qty 2 '+' click with JS bypass
                             if target_qty == 2:
                                 try:
-                                    plus_btn = page.locator("button:has-text('+')").first
+                                    plus_btn = page.locator("button:has-text('+') >> visible=true").first
                                     await plus_btn.wait_for(state="visible", timeout=3000)
                                     await plus_btn.click(force=True, timeout=2000)
+                                    await plus_btn.evaluate("(el) => el.click()") # Double safety
                                     await page.wait_for_timeout(1500) 
                                 except Exception:
                                     pass
@@ -883,7 +888,7 @@ class AccountController:
                             # Balance check
                             wallet_balance_text = "Balance info not found"
                             try:
-                                balance_locator = page.locator("text=/Wallet Balance:/i").first
+                                balance_locator = page.locator("text=/Wallet Balance:/i >> visible=true").first
                                 if await balance_locator.is_visible(timeout=3000):
                                     wallet_balance_text = await balance_locator.inner_text()
                             except Exception:
@@ -908,16 +913,20 @@ class AccountController:
                                 await self.telegram.send_message(f"🚨 INSUFFICIENT BALANCE in {slot_id}. Buy stopped.")
                                 break 
                                 
-                            # Payment flow
+                            # Payment flow 1 (Visible Only + JS fallback)
                             await pay_btn_1.wait_for(state="visible", timeout=5000)
                             await pay_btn_1.click(force=True, timeout=3000)
+                            await pay_btn_1.evaluate("(el) => el.click()")
 
-                            await page.locator("text=Delivery Details").wait_for(state="visible", timeout=6000)
+                            # Delivery Popup Wait
+                            await page.locator("text=Delivery Details >> visible=true").wait_for(state="visible", timeout=6000)
                             await page.wait_for_timeout(1500)
 
-                            pay_btn_2 = page.locator("button:has-text('Pay via wallet')").last
+                            # Payment flow 2 (Delivery Popup me)
+                            pay_btn_2 = page.locator("button >> text='Pay via wallet' >> visible=true").last
                             await pay_btn_2.wait_for(state="visible", timeout=5000)
                             await pay_btn_2.click(force=True, timeout=3000)
+                            await pay_btn_2.evaluate("(el) => el.click()")
 
                             current_time = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
                             await self.telegram.send_message(
@@ -960,6 +969,7 @@ class AccountController:
         except Exception as e:
             await self.telegram.send_message(f"❌ Sniper worker critically crashed for {slot_id}: {str(e)}")
             self.sniper_tasks.pop(slot_id, None)
+
 
     # =========================================================
     # START / STOP SNIPER MODE
