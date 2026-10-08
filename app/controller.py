@@ -190,7 +190,7 @@ class AccountController:
         return None
 
     async def _find_otp_inputs(self, page):
-        # AGGRESSIVE OTP FINDER LOGIC
+        # DYNAMIC OTP FINDER LOGIC (Supports 6 and 8 digit boxes)
         selectors = [
             'input[autocomplete="one-time-code"]',
             'input[placeholder*="OTP" i]',
@@ -223,8 +223,9 @@ class AccountController:
                         type_attr = await el.get_attribute("type")
                         if type_attr in ["tel", "number", "text"]:
                             found.append(el)
+                # Max allow 8 boxes if available
                 if len(found) >= 6:
-                    return found[:6]
+                    return found[:8] 
             except Exception:
                 pass
                 
@@ -283,8 +284,9 @@ class AccountController:
         try: account = self.get_account(slot_id)
         except ValueError as exc: return await update.message.reply_text(f"❌ {exc}")
 
-        if len(otp) != 6 or not otp.isdigit():
-            return await update.message.reply_text("❌ OTP must be exactly 6 digits.")
+        # OTP LENGTH CHECK (6 OR 8)
+        if len(otp) not in [6, 8] or not otp.isdigit():
+            return await update.message.reply_text("❌ OTP must be exactly 6 or 8 digits.")
 
         try:
             page = await self.browser.get_page(slot_id)
@@ -293,19 +295,22 @@ class AccountController:
             otp_inputs = []
             for attempt in range(15):
                 otp_inputs = await self._find_otp_inputs(page)
-                if otp_inputs and len(otp_inputs) >= 6:
+                # We need either 1 single input box, or at least enough boxes for the OTP length
+                if otp_inputs and (len(otp_inputs) == 1 or len(otp_inputs) >= len(otp)):
                     break
                 await page.wait_for_timeout(500)
                 
             if not otp_inputs: 
                 raise RuntimeError("OTP fields not found on the page.")
 
+            # Dynamic OTP Filling
             if len(otp_inputs) == 1: 
                 await otp_inputs[0].fill(otp)
             else:
-                boxes = otp_inputs[:6]
-                for i, digit in enumerate(otp): 
-                    await boxes[i].fill(digit)
+                boxes = otp_inputs[:len(otp)]
+                for i, digit in enumerate(otp):
+                    if i < len(boxes):
+                        await boxes[i].fill(digit)
 
             await page.wait_for_timeout(700)
             
