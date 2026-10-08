@@ -118,7 +118,7 @@ class AccountController:
         await update.message.reply_text("\n".join(lines))
 
     # =========================================================
-    # LOGIN / OTP HELPER LOCATORS (CRASH PROOF & BULLETPROOF JS)
+    # LOGIN / OTP HELPER LOCATORS
     # =========================================================
 
     async def _find_mobile_input(self, page):
@@ -146,18 +146,13 @@ class AccountController:
         mobile_input = await self._find_mobile_input(page)
         if mobile_input is not None: return mobile_input
 
-        # Force rooter to show popup via deep JS Injection - Guaranteed hit on the last icon in header
         try:
             await page.evaluate('''() => {
                 const header = document.querySelector('header');
                 if(header) {
-                    // Try to find the profile container, which is usually the last div or svg in header
                     const elements = Array.from(header.querySelectorAll('svg, button, img, .mantine-Avatar-root'));
                     if(elements.length > 0) {
-                        // The last one is almost always the profile
                         const profileIcon = elements[elements.length - 1];
-                        
-                        // Force a cascade of click events
                         profileIcon.dispatchEvent(new MouseEvent('mousedown', { bubbles: true }));
                         profileIcon.dispatchEvent(new MouseEvent('mouseup', { bubbles: true }));
                         profileIcon.click();
@@ -169,7 +164,6 @@ class AccountController:
             if mobile_input: return mobile_input
         except Exception: pass
 
-        # Fallback to visual clicking if JS didn't trigger React state
         candidates = [page.get_by_text("Login / Sign Up", exact=True), page.get_by_text("Login", exact=True)]
         for candidate in candidates:
             try:
@@ -262,7 +256,6 @@ class AccountController:
 
             await update.message.reply_text(f"🔍 Ensuring product page for {slot_id}...")
             
-            # FORCE IT TO GO TO PRODUCT URL
             page = await self.browser.open_product_page(slot_id)
             await page.goto(settings.product_url, wait_until="domcontentloaded", timeout=60000)
             
@@ -359,6 +352,11 @@ class AccountController:
             account.update(logged_in=True, active=True, current_page="✅ Logged In Idle", last_error=None)
             await update.message.reply_text(f"✅ Login successful for {slot_id}.")
             
+            # 🔥 NEW: AUTO-START SNIPER AFTER LOGIN 🔥
+            if slot_id not in self.sniper_tasks:
+                self.sniper_tasks[slot_id] = asyncio.create_task(self._sniper_worker(slot_id))
+                await update.message.reply_text(f"🔫 Sniper AUTO-STARTED for {slot_id}!")
+                
         except Exception as exc:
             try: account.update(last_error=str(exc))
             except: pass
@@ -391,8 +389,16 @@ class AccountController:
             cb = int(time.time())
             fresh_url = f"{settings.product_url}?cb={cb}" if "?" not in settings.product_url else f"{settings.product_url}&cb={cb}"
             await page.goto(fresh_url, wait_until="domcontentloaded", timeout=60000)
-            account.update(current_page="🔄 Manually Refreshed", last_error=None)
+            
+            # Ensure bot knows it's logged in (in case of container restart)
+            account.update(logged_in=True, current_page="🔄 Manually Refreshed", last_error=None)
             await update.message.reply_text(f"🔄 Hard Refreshed {slot_id}")
+            
+            # 🔥 NEW: AUTO-START SNIPER ON REFRESH 🔥
+            if slot_id not in self.sniper_tasks:
+                self.sniper_tasks[slot_id] = asyncio.create_task(self._sniper_worker(slot_id))
+                await update.message.reply_text(f"🔫 Sniper AUTO-STARTED for {slot_id} via refresh!")
+
         except Exception as exc:
             try: account.update(last_error=str(exc))
             except: pass
@@ -615,14 +621,10 @@ class AccountController:
                         task = asyncio.create_task(self._sniper_worker(slot_id))
                         self.sniper_tasks[slot_id] = task
                         await update.message.reply_text(f"🔫 Sniper started for {slot_id}")
-                    elif not acc.logged_in:
-                        await update.message.reply_text(f"⚠️ {slot_id} is not logged in.")
-                    else:
-                        await update.message.reply_text(f"⚠️ Sniper already running for {slot_id}.")
                 except ValueError as exc:
                     await update.message.reply_text(f"❌ {exc}")
         except Exception as exc:
-            await update.message.reply_text(f"❌ Sniper Command Error: {exc}")
+            pass
 
     async def trigger_stock_buy(self):
         self.stock_event.set()
