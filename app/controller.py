@@ -117,21 +117,31 @@ class AccountController:
 
         await update.message.reply_text("\n".join(lines))
 
-    # =========================================================
+      # =========================================================
     # LOGIN / OTP HELPER LOCATORS
     # =========================================================
 
     async def _find_mobile_input(self, page):
+        # EXTREMELY STRICT SELECTORS - Taaki Search Bar select na ho
         selectors = [
-            'input[type="tel"]', 'input[inputmode="tel"]', 'input[name="phone"]', 
-            'input[placeholder*="mobile" i]', 'input[placeholder*="number" i]', 'input.mantine-Input-input'
+            'input[type="tel"]', 
+            'input[inputmode="tel"]', 
+            'input[name="phone"]', 
+            'input[name="mobile"]',
+            'input[placeholder*="mobile" i]', 
+            'input[placeholder*="phone" i]'
         ]
         for selector in selectors:
             try:
                 locator = page.locator(selector)
                 for index in range(await locator.count()):
                     item = locator.nth(index)
-                    if await item.is_visible(timeout=500): return item
+                    if await item.is_visible(timeout=500): 
+                        # Extra Safety: Agar input box ke placeholder me "search" hai, toh usko ignore karo
+                        placeholder = await item.get_attribute("placeholder")
+                        if placeholder and "search" in placeholder.lower():
+                            continue
+                        return item
             except Exception: continue
         return None
 
@@ -141,10 +151,16 @@ class AccountController:
             await page.wait_for_timeout(1000)
         except Exception: pass
 
+        # Agar popup pehle se khula hai
         mobile_input = await self._find_mobile_input(page)
         if mobile_input is not None: return mobile_input
 
-        candidates = [page.get_by_text("Login / Sign Up", exact=True), page.get_by_text("Login", exact=True), page.get_by_role("button", name="Login")]
+        # Login / Sign Up buttons par click karne ki koshish
+        candidates = [
+            page.get_by_text("Login / Sign Up", exact=True), 
+            page.get_by_text("Login", exact=True), 
+            page.get_by_role("button", name="Login")
+        ]
         for candidate in candidates:
             try:
                 for index in range(await candidate.count()):
@@ -156,9 +172,10 @@ class AccountController:
                         if mobile_input is not None: return mobile_input
             except Exception: continue
 
+        # Header me profile image ya any button par click (Agar direct Login button na ho)
         try:
-            header_controls = page.locator("header button, header [role='button'], header a, header img[alt*='profile']")
-            for index in range(await header_controls.count() - 1, -1, -1):
+            header_controls = page.locator("header img[alt*='profile'], header button, header [role='button']")
+            for index in range(await header_controls.count()):
                 item = header_controls.nth(index)
                 if await item.is_visible(timeout=500):
                     await item.click(timeout=5000)
@@ -168,6 +185,8 @@ class AccountController:
         except Exception: pass
 
         return None
+
+
 
     async def _find_send_otp_button(self, page):
         # BROADENED SELECTORS FOR CONTINUE BUTTON
