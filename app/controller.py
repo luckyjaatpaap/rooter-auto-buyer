@@ -276,6 +276,10 @@ class AccountController:
             account.update(last_error=str(exc), active=False)
             await update.message.reply_text(f"❌ Login start failed: {exc}")
 
+    # =========================================================
+    # OTP HANDLER (HUMAN TYPING + FORCE CLICK BYPASS)
+    # =========================================================
+
     async def handle_otp(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         args = context.args
         if len(args) < 2: return await update.message.reply_text("❌ Format:\n/otp S1-A1 123456")
@@ -295,7 +299,6 @@ class AccountController:
             otp_inputs = []
             for attempt in range(15):
                 otp_inputs = await self._find_otp_inputs(page)
-                # We need either 1 single input box, or at least enough boxes for the OTP length
                 if otp_inputs and (len(otp_inputs) == 1 or len(otp_inputs) >= len(otp)):
                     break
                 await page.wait_for_timeout(500)
@@ -303,22 +306,33 @@ class AccountController:
             if not otp_inputs: 
                 raise RuntimeError("OTP fields not found on the page.")
 
-            # Dynamic OTP Filling
+            # REAL HUMAN TYPING SIMULATION (React Bypass)
             if len(otp_inputs) == 1: 
-                await otp_inputs[0].fill(otp)
+                await otp_inputs[0].focus()
+                for digit in otp:
+                    await page.keyboard.press(digit)
+                    await page.wait_for_timeout(50)
             else:
                 boxes = otp_inputs[:len(otp)]
                 for i, digit in enumerate(otp):
                     if i < len(boxes):
-                        await boxes[i].fill(digit)
+                        await boxes[i].focus()
+                        await page.keyboard.press(digit)
+                        await page.wait_for_timeout(100) # 100ms human delay
 
-            await page.wait_for_timeout(700)
+            await page.wait_for_timeout(1000) # Form ko process hone ka time do
             
             verify_button = await self._find_verify_button(page)
             if verify_button is None: 
                 raise RuntimeError("Verify button not found.")
                 
-            await verify_button.click(timeout=5000)
+            # ULTIMATE FORCE ENABLE BUTTON & CLICK
+            # Ye Javascript lock tod dega agar button disabled hoga
+            await verify_button.evaluate("(el) => { el.removeAttribute('disabled'); el.removeAttribute('data-disabled'); el.disabled = false; }")
+            
+            # Force click to bypass disabled checks
+            await verify_button.click(force=True, timeout=5000)
+            
             await page.wait_for_timeout(3500)
 
             page = await self.browser.ensure_product_page(slot_id)
