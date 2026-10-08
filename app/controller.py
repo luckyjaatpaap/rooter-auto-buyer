@@ -118,7 +118,7 @@ class AccountController:
         await update.message.reply_text("\n".join(lines))
 
     # =========================================================
-    # LOGIN / OTP HELPER LOCATORS (CRASH PROOF)
+    # LOGIN / OTP HELPER LOCATORS (CRASH PROOF & BULLETPROOF JS)
     # =========================================================
 
     async def _find_mobile_input(self, page):
@@ -132,25 +132,44 @@ class AccountController:
                 for index in range(await locator.count()):
                     item = locator.nth(index)
                     if await item.is_visible(timeout=300):
-                        # Verify it's not the search bar
                         ph = await item.get_attribute("placeholder")
-                        if ph and "search" in ph.lower():
-                            continue
+                        if ph and "search" in ph.lower(): continue
                         return item
             except Exception: pass
         return None
 
     async def _open_login_popup(self, page):
-        try:
-            await self.browser.handle_location_popup(page)
-            await page.wait_for_timeout(1000)
+        try: await self.browser.handle_location_popup(page)
         except Exception: pass
+        await page.wait_for_timeout(1000)
 
-        # 1. Check if input is already visible
         mobile_input = await self._find_mobile_input(page)
         if mobile_input is not None: return mobile_input
 
-        # 2. Normal Button Click (If available)
+        # Force rooter to show popup via deep JS Injection - Guaranteed hit on the last icon in header
+        try:
+            await page.evaluate('''() => {
+                const header = document.querySelector('header');
+                if(header) {
+                    // Try to find the profile container, which is usually the last div or svg in header
+                    const elements = Array.from(header.querySelectorAll('svg, button, img, .mantine-Avatar-root'));
+                    if(elements.length > 0) {
+                        // The last one is almost always the profile
+                        const profileIcon = elements[elements.length - 1];
+                        
+                        // Force a cascade of click events
+                        profileIcon.dispatchEvent(new MouseEvent('mousedown', { bubbles: true }));
+                        profileIcon.dispatchEvent(new MouseEvent('mouseup', { bubbles: true }));
+                        profileIcon.click();
+                    }
+                }
+            }''')
+            await page.wait_for_timeout(2000)
+            mobile_input = await self._find_mobile_input(page)
+            if mobile_input: return mobile_input
+        except Exception: pass
+
+        # Fallback to visual clicking if JS didn't trigger React state
         candidates = [page.get_by_text("Login / Sign Up", exact=True), page.get_by_text("Login", exact=True)]
         for candidate in candidates:
             try:
@@ -161,43 +180,7 @@ class AccountController:
                     if mobile_input: return mobile_input
             except Exception: pass
 
-        # 3. 🚀 JS INJECTION: Ultimate Force Click (Bypasses invisible ads/banners)
-        try:
-            await page.evaluate('''() => {
-                let header = document.querySelector('header');
-                if(header) {
-                    // Find all icons/buttons in header
-                    let icons = header.querySelectorAll('svg, button, .mantine-Avatar-root');
-                    if(icons.length > 0) {
-                        // Click the absolute last icon (Profile)
-                        let target = icons[icons.length - 1];
-                        target.click(); // Standard click
-                        // Dispatch event for React
-                        target.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true, view: window }));
-                    }
-                }
-            }''')
-            await page.wait_for_timeout(2000)
-            mobile_input = await self._find_mobile_input(page)
-            if mobile_input: return mobile_input
-        except Exception: pass
-
-        # 4. 🎯 X-Y COORDINATE CLICK (Fallback)
-        # Exactly click on the top right area where the profile icon is located
-        try:
-            viewport = page.viewport_size
-            if viewport:
-                # Top right corner coordinates (width - 40px, height 35px)
-                x = viewport['width'] - 40
-                y = 35
-                await page.mouse.click(x, y)
-                await page.wait_for_timeout(2000)
-                mobile_input = await self._find_mobile_input(page)
-                if mobile_input: return mobile_input
-        except Exception: pass
-
         return None
-
 
     async def _find_send_otp_button(self, page):
         candidates = [
@@ -230,8 +213,7 @@ class AccountController:
                 count = await locator.count()
                 for index in range(count):
                     item = locator.nth(index)
-                    if await item.is_visible(timeout=300):
-                        found.append(item)
+                    if await item.is_visible(timeout=300): found.append(item)
                 if found: return found
             except Exception: continue
                 
@@ -278,9 +260,13 @@ class AccountController:
             if not phone_number.isdigit() or len(phone_number) != 10:
                 return await update.message.reply_text("❌ Enter a valid 10-digit Indian mobile number.")
 
-            await update.message.reply_text(f"🔍 Starting login for {slot_id}...")
+            await update.message.reply_text(f"🔍 Ensuring product page for {slot_id}...")
+            
+            # FORCE IT TO GO TO PRODUCT URL
             page = await self.browser.open_product_page(slot_id)
-            try: await self.browser.handle_location_popup(page); await page.wait_for_timeout(1000)
+            await page.goto(settings.product_url, wait_until="domcontentloaded", timeout=60000)
+            
+            try: await self.browser.handle_location_popup(page); await page.wait_for_timeout(2000)
             except Exception: pass
 
             account.update(phone_number=phone_number, active=True, current_page="🔐 Handling Login", last_error=None)
@@ -308,7 +294,7 @@ class AccountController:
             await send_otp_button.evaluate("(el) => { el.removeAttribute('disabled'); el.removeAttribute('data-disabled'); el.disabled = false; }")
             await send_otp_button.click(force=True, timeout=3000)
 
-            for _ in range(40): # Wait 20 seconds
+            for _ in range(40): 
                 await page.wait_for_timeout(500)
                 if await self._find_otp_inputs(page): break
             else: 
