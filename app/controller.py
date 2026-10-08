@@ -190,7 +190,6 @@ class AccountController:
         return None
 
     async def _find_otp_inputs(self, page):
-        # DYNAMIC OTP FINDER LOGIC (Supports 6 and 8 digit boxes)
         selectors = [
             'input[autocomplete="one-time-code"]',
             'input[placeholder*="OTP" i]',
@@ -223,7 +222,6 @@ class AccountController:
                         type_attr = await el.get_attribute("type")
                         if type_attr in ["tel", "number", "text"]:
                             found.append(el)
-                # Max allow 8 boxes if available
                 if len(found) >= 6:
                     return found[:8] 
             except Exception:
@@ -254,6 +252,8 @@ class AccountController:
         except ValueError as exc: return await update.message.reply_text(f"❌ {exc}")
 
         if account.logged_in: return await update.message.reply_text(f"⚠️ {slot_id} is already logged in.")
+        if not phone_number.isdigit() or len(phone_number) != 10:
+            return await update.message.reply_text("❌ Enter a valid 10-digit Indian mobile number.")
 
         try:
             page = await self.browser.open_product_page(slot_id)
@@ -263,22 +263,29 @@ class AccountController:
             account.update(phone_number=phone_number, active=True, current_page="🔐 Handling Login", last_error=None)
             mobile_input = await self._open_login_popup(page)
             if mobile_input is None: raise RuntimeError("Login popup not opened.")
-            await mobile_input.fill(phone_number)
-            await page.wait_for_timeout(500)
+            
+            # 🚀 HUMAN TYPING FOR MOBILE NUMBER (Bypass React checks)
+            await mobile_input.focus()
+            await page.keyboard.type(phone_number, delay=100)
+            await page.wait_for_timeout(1000)
 
             send_otp_button = await self._find_send_otp_button(page)
             if send_otp_button is None: raise RuntimeError("Continue button not found.")
-            await send_otp_button.click(timeout=5000)
+            
+            # 🚀 FORCE UNLOCK AND CLICK SEND OTP BUTTON
+            await send_otp_button.evaluate("(el) => { el.removeAttribute('disabled'); el.removeAttribute('data-disabled'); el.disabled = false; }")
+            await send_otp_button.click(force=True, timeout=5000)
+
+            for _ in range(30):
+                await page.wait_for_timeout(500)
+                if await self._find_otp_inputs(page): break
+            else: raise RuntimeError("OTP popup did not appear.")
 
             account.update(current_page="📩 OTP Sent. Waiting...", last_error=None)
             await update.message.reply_text(f"📩 OTP sent for {slot_id}.\nSend: /otp {slot_id} 123456")
         except Exception as exc:
             account.update(last_error=str(exc), active=False)
             await update.message.reply_text(f"❌ Login start failed: {exc}")
-
-    # =========================================================
-    # OTP HANDLER (HUMAN TYPING + FORCE CLICK BYPASS)
-    # =========================================================
 
     async def handle_otp(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         args = context.args
@@ -288,7 +295,6 @@ class AccountController:
         try: account = self.get_account(slot_id)
         except ValueError as exc: return await update.message.reply_text(f"❌ {exc}")
 
-        # OTP LENGTH CHECK (6 OR 8)
         if len(otp) not in [6, 8] or not otp.isdigit():
             return await update.message.reply_text("❌ OTP must be exactly 6 or 8 digits.")
 
@@ -306,33 +312,27 @@ class AccountController:
             if not otp_inputs: 
                 raise RuntimeError("OTP fields not found on the page.")
 
-            # REAL HUMAN TYPING SIMULATION (React Bypass)
+            # 🚀 HUMAN TYPING SIMULATION FOR OTP
             if len(otp_inputs) == 1: 
                 await otp_inputs[0].focus()
-                for digit in otp:
-                    await page.keyboard.press(digit)
-                    await page.wait_for_timeout(50)
+                await page.keyboard.type(otp, delay=100)
             else:
                 boxes = otp_inputs[:len(otp)]
                 for i, digit in enumerate(otp):
                     if i < len(boxes):
                         await boxes[i].focus()
                         await page.keyboard.press(digit)
-                        await page.wait_for_timeout(100) # 100ms human delay
+                        await page.wait_for_timeout(100)
 
-            await page.wait_for_timeout(1000) # Form ko process hone ka time do
+            await page.wait_for_timeout(1000) 
             
             verify_button = await self._find_verify_button(page)
             if verify_button is None: 
                 raise RuntimeError("Verify button not found.")
                 
-            # ULTIMATE FORCE ENABLE BUTTON & CLICK
-            # Ye Javascript lock tod dega agar button disabled hoga
+            # 🚀 FORCE ENABLE VERIFY BUTTON & CLICK
             await verify_button.evaluate("(el) => { el.removeAttribute('disabled'); el.removeAttribute('data-disabled'); el.disabled = false; }")
-            
-            # Force click to bypass disabled checks
             await verify_button.click(force=True, timeout=5000)
-            
             await page.wait_for_timeout(3500)
 
             page = await self.browser.ensure_product_page(slot_id)
