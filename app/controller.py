@@ -190,16 +190,44 @@ class AccountController:
         return None
 
     async def _find_otp_inputs(self, page):
-        selectors = ['input[autocomplete="one-time-code"]', 'input[placeholder*="OTP" i]', 'input[type="tel"]']
+        # AGGRESSIVE OTP FINDER LOGIC
+        selectors = [
+            'input[autocomplete="one-time-code"]',
+            'input[placeholder*="OTP" i]',
+            'input[inputmode="numeric"]',
+            'input[type="tel"]',
+            'input[type="number"]'
+        ]
+
         found = []
         for selector in selectors:
             try:
                 locator = page.locator(selector)
-                for index in range(await locator.count()):
+                count = await locator.count()
+                for index in range(count):
                     item = locator.nth(index)
-                    if await item.is_visible(timeout=300): found.append(item)
-                if found: return found
-            except Exception: continue
+                    if await item.is_visible(timeout=500):
+                        found.append(item)
+                if found:
+                    return found
+            except Exception:
+                continue
+                
+        if not found:
+            try:
+                inputs = page.locator('input')
+                count = await inputs.count()
+                for i in range(count):
+                    el = inputs.nth(i)
+                    if await el.is_visible(timeout=300):
+                        type_attr = await el.get_attribute("type")
+                        if type_attr in ["tel", "number", "text"]:
+                            found.append(el)
+                if len(found) >= 6:
+                    return found[:6]
+            except Exception:
+                pass
+                
         return found
 
     async def _find_verify_button(self, page):
@@ -241,11 +269,6 @@ class AccountController:
             if send_otp_button is None: raise RuntimeError("Continue button not found.")
             await send_otp_button.click(timeout=5000)
 
-            for _ in range(30):
-                await page.wait_for_timeout(500)
-                if await self._find_otp_inputs(page): break
-            else: raise RuntimeError("OTP popup did not appear.")
-
             account.update(current_page="📩 OTP Sent. Waiting...", last_error=None)
             await update.message.reply_text(f"📩 OTP sent for {slot_id}.\nSend: /otp {slot_id} 123456")
         except Exception as exc:
@@ -260,18 +283,36 @@ class AccountController:
         try: account = self.get_account(slot_id)
         except ValueError as exc: return await update.message.reply_text(f"❌ {exc}")
 
+        if len(otp) != 6 or not otp.isdigit():
+            return await update.message.reply_text("❌ OTP must be exactly 6 digits.")
+
         try:
             page = await self.browser.get_page(slot_id)
-            otp_inputs = await self._find_otp_inputs(page)
-            if not otp_inputs: raise RuntimeError("OTP fields not found.")
+            
+            # AGGRESSIVE RETRY LOGIC FOR OTP FIELDS
+            otp_inputs = []
+            for attempt in range(15):
+                otp_inputs = await self._find_otp_inputs(page)
+                if otp_inputs and len(otp_inputs) >= 6:
+                    break
+                await page.wait_for_timeout(500)
+                
+            if not otp_inputs: 
+                raise RuntimeError("OTP fields not found on the page.")
 
-            if len(otp_inputs) == 1: await otp_inputs[0].fill(otp)
+            if len(otp_inputs) == 1: 
+                await otp_inputs[0].fill(otp)
             else:
-                for i, digit in enumerate(otp): await otp_inputs[i].fill(digit)
+                boxes = otp_inputs[:6]
+                for i, digit in enumerate(otp): 
+                    await boxes[i].fill(digit)
 
             await page.wait_for_timeout(700)
+            
             verify_button = await self._find_verify_button(page)
-            if verify_button is None: raise RuntimeError("Verify button not found.")
+            if verify_button is None: 
+                raise RuntimeError("Verify button not found.")
+                
             await verify_button.click(timeout=5000)
             await page.wait_for_timeout(3500)
 
@@ -279,6 +320,7 @@ class AccountController:
             await self.browser.save_session(slot_id)
             account.update(logged_in=True, active=True, current_page="✅ Logged In Idle", last_error=None)
             await update.message.reply_text(f"✅ Login successful for {slot_id}.")
+            
         except Exception as exc:
             account.update(last_error=str(exc))
             await update.message.reply_text(f"❌ OTP failed: {exc}")
@@ -323,10 +365,11 @@ class AccountController:
         try:
             account = self.get_account(slot_id)
             await self.browser.logout_slot(slot_id)
-            account.update(phone_number=None, logged_in=False, active=False, current_page="unknown", last_error=None)
+            account.update(phone_number=None, logged_in=False, active=False, current_page="unknown", last_error=None, wallet_balance=None)
             await update.message.reply_text(f"🚪 Logged out {slot_id}")
         except Exception as exc:
             await update.message.reply_text(f"❌ Logout failed: {exc}")
+
 
     # =========================================================
     # 🎯 30s SNIPER BACKGROUND WORKER (GOD MODE)
@@ -339,7 +382,6 @@ class AccountController:
             await self.telegram.send_message(f"🎯 Sniper ACTIVATED for {slot_id}. 30-sec Auto-Refresh running...")
 
             while True:
-                # Always clear old errors at the start of a fresh loop
                 account.update(last_error=None)
 
                 # -----------------------------
@@ -395,7 +437,7 @@ class AccountController:
                         else:
                             account.update(last_error="Rs.5000 element completely missing from DOM")
                             
-                    await page.wait_for_timeout(1500) # Give UI time to reflect the selection
+                    await page.wait_for_timeout(1500) 
                     
                     # -----------------------------
                     # 4. STOCK CHECK RADAR
@@ -416,7 +458,6 @@ class AccountController:
                     
                     for target_qty in [2, 1]:
                         try:
-                            # If retrying Qty 1, start fresh
                             if target_qty == 1:
                                 account.update(current_page="🔄 [STAGE: Retrying with Qty 1]")
                                 retry_url = f"{settings.product_url}?retry={int(time.time())}" if "?" not in settings.product_url else f"{settings.product_url}&retry={int(time.time())}"
@@ -431,7 +472,6 @@ class AccountController:
                                 
                                 pay_btn_1 = page.locator("button >> text='Pay via wallet' >> visible=true").first
 
-                            # Add Quantity
                             if target_qty == 2:
                                 account.update(current_page="➕ [STAGE: Changing Quantity to 2]")
                                 try:
@@ -443,7 +483,6 @@ class AccountController:
                                 except Exception as e:
                                     account.update(last_error=f"Plus Button Error: {str(e)[:50]}")
                             
-                            # Balance Check
                             account.update(current_page="💰 [STAGE: Checking Balance]")
                             wallet_balance_text = "Balance info not found"
                             try:
@@ -453,7 +492,6 @@ class AccountController:
                             except Exception:
                                 pass
 
-                            # Pre-buy Verification Screenshot
                             account.update(current_page="📸 [STAGE: Taking Verification Screenshot]")
                             screenshot_path = self.screenshots_dir / f"{slot_id}_pre_buy_qty_{target_qty}.png"
                             await page.screenshot(path=str(screenshot_path), full_page=False)
@@ -463,38 +501,32 @@ class AccountController:
                             )
                             if screenshot_path.exists(): screenshot_path.unlink()
 
-                            # Hard Stop on Insufficient Funds
                             if "insufficient" in wallet_balance_text.lower() or "add money" in wallet_balance_text.lower():
                                 account.update(current_page="🛑 [STAGE: Stopped - Insufficient Funds]")
                                 await self.telegram.send_message(f"🚨 INSUFFICIENT BALANCE in {slot_id}. Buy stopped.")
                                 break 
                                 
-                            # Payment Click 1
                             account.update(current_page="💳 [STAGE: Clicking First Pay Button]")
                             await pay_btn_1.wait_for(state="visible", timeout=5000)
                             await pay_btn_1.click(force=True, timeout=3000)
                             await pay_btn_1.evaluate("(el) => el.click()")
 
-                            # Popup Wait
                             account.update(current_page="📝 [STAGE: Waiting for Delivery Popup]")
                             await page.locator("text=Delivery Details >> visible=true").wait_for(state="visible", timeout=6000)
                             await page.wait_for_timeout(1500)
 
-                            # Payment Click 2
                             account.update(current_page="💳 [STAGE: Clicking Final Pay Button]")
                             pay_btn_2 = page.locator("button >> text='Pay via wallet' >> visible=true").last
                             await pay_btn_2.wait_for(state="visible", timeout=5000)
                             await pay_btn_2.click(force=True, timeout=3000)
                             await pay_btn_2.evaluate("(el) => el.click()")
 
-                            # Success Logging
                             current_time = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
                             account.update(current_page="✅ [STAGE: SUCCESS - Code Bought!]")
                             await self.telegram.send_message(f"✅✅ SUCCESS: CODE PURCHASED!\nAmount: Rs.5000\nQty: {target_qty}\nSlot: {slot_id}\nTime: {current_time}")
                             break 
 
                         except Exception as flow_err:
-                            # Detailed error logging for Buy Flow
                             account.update(last_error=f"Buy Flow Qty {target_qty} Error: {str(flow_err)[:60]}")
                             error_ss = self.screenshots_dir / f"{slot_id}_error_qty_{target_qty}.png"
                             try:
@@ -513,7 +545,6 @@ class AccountController:
                     await asyncio.sleep(5)
                     
                 except Exception as loop_err:
-                    # Catch and expose ANY outer loop errors
                     account.update(last_error=f"Outer Loop Error: {str(loop_err)[:80]}")
                     await page.wait_for_timeout(2000)
 
