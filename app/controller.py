@@ -146,12 +146,12 @@ class AccountController:
             await page.wait_for_timeout(1000)
         except Exception: pass
 
-        # 1. Directly visible?
+        # 1. Check if input is already visible
         mobile_input = await self._find_mobile_input(page)
         if mobile_input is not None: return mobile_input
 
-        # 2. Safely click text buttons
-        candidates = [page.get_by_text("Login / Sign Up", exact=True), page.get_by_text("Login", exact=True), page.locator("button:has-text('Login')")]
+        # 2. Normal Button Click (If available)
+        candidates = [page.get_by_text("Login / Sign Up", exact=True), page.get_by_text("Login", exact=True)]
         for candidate in candidates:
             try:
                 if await candidate.count() > 0 and await candidate.first.is_visible(timeout=300):
@@ -161,22 +161,43 @@ class AccountController:
                     if mobile_input: return mobile_input
             except Exception: pass
 
-        # 3. Crash-Proof Header Icon Clicker
+        # 3. 🚀 JS INJECTION: Ultimate Force Click (Bypasses invisible ads/banners)
         try:
-            header_items = page.locator("header svg, header button, header .mantine-Avatar-image")
-            count = await header_items.count()
-            for index in range(count - 1, -1, -1):
-                try:
-                    item = header_items.nth(index)
-                    if await item.is_visible(timeout=300):
-                        await item.click(force=True, timeout=1500)
-                        await page.wait_for_timeout(1500)
-                        mobile_input = await self._find_mobile_input(page)
-                        if mobile_input: return mobile_input
-                except Exception: continue
+            await page.evaluate('''() => {
+                let header = document.querySelector('header');
+                if(header) {
+                    // Find all icons/buttons in header
+                    let icons = header.querySelectorAll('svg, button, .mantine-Avatar-root');
+                    if(icons.length > 0) {
+                        // Click the absolute last icon (Profile)
+                        let target = icons[icons.length - 1];
+                        target.click(); // Standard click
+                        // Dispatch event for React
+                        target.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true, view: window }));
+                    }
+                }
+            }''')
+            await page.wait_for_timeout(2000)
+            mobile_input = await self._find_mobile_input(page)
+            if mobile_input: return mobile_input
+        except Exception: pass
+
+        # 4. 🎯 X-Y COORDINATE CLICK (Fallback)
+        # Exactly click on the top right area where the profile icon is located
+        try:
+            viewport = page.viewport_size
+            if viewport:
+                # Top right corner coordinates (width - 40px, height 35px)
+                x = viewport['width'] - 40
+                y = 35
+                await page.mouse.click(x, y)
+                await page.wait_for_timeout(2000)
+                mobile_input = await self._find_mobile_input(page)
+                if mobile_input: return mobile_input
         except Exception: pass
 
         return None
+
 
     async def _find_send_otp_button(self, page):
         candidates = [
