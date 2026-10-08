@@ -145,22 +145,18 @@ class AccountController:
             except Exception: continue
         return None
 
-    async def _open_login_popup(self, page):
+        async def _open_login_popup(self, page):
         try:
             await self.browser.handle_location_popup(page)
             await page.wait_for_timeout(1000)
         except Exception: pass
 
-        # Agar popup pehle se khula hai
+        # 1. Pehle try karo direct input mil jaye (agar popup pehle se khula ho)
         mobile_input = await self._find_mobile_input(page)
         if mobile_input is not None: return mobile_input
 
-        # Login / Sign Up buttons par click karne ki koshish
-        candidates = [
-            page.get_by_text("Login / Sign Up", exact=True), 
-            page.get_by_text("Login", exact=True), 
-            page.get_by_role("button", name="Login")
-        ]
+        # 2. Login / Sign Up buttons par click karne ki koshish
+        candidates = [page.get_by_text("Login / Sign Up", exact=True), page.get_by_text("Login", exact=True), page.get_by_role("button", name="Login")]
         for candidate in candidates:
             try:
                 for index in range(await candidate.count()):
@@ -172,16 +168,26 @@ class AccountController:
                         if mobile_input is not None: return mobile_input
             except Exception: continue
 
-        # Header me profile image ya any button par click (Agar direct Login button na ho)
+        # 3. 🔥 AGGRESSIVE HEADER ICON CLICKING 🔥
+        # Ab hum header mein aakhiri element dhundhenge, jahan par profile icon hota hai
         try:
-            header_controls = page.locator("header img[alt*='profile'], header button, header [role='button']")
-            for index in range(await header_controls.count()):
+            # Header ke andar right side ke clickable elements dhoondho (buttons ya SVG icons)
+            header_controls = page.locator("header svg, header button, header [role='button']")
+            count = await header_controls.count()
+            
+            # Piche se (right side se) click karna shuru karo kyunki profile aakhiri me hota hai
+            for index in range(count - 1, -1, -1):
                 item = header_controls.nth(index)
                 if await item.is_visible(timeout=500):
-                    await item.click(timeout=5000)
+                    try:
+                        await item.click(timeout=5000, force=True) # Force click
+                    except Exception:
+                        pass # Ignore individual click errors
+                    
                     await page.wait_for_timeout(1500)
                     mobile_input = await self._find_mobile_input(page)
-                    if mobile_input is not None: return mobile_input
+                    if mobile_input is not None: 
+                        return mobile_input
         except Exception: pass
 
         return None
