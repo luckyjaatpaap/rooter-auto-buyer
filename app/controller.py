@@ -81,7 +81,7 @@ class AccountController:
             f"Total slots: {settings.total_slots}\n"
             f"Current Service ID: {settings.current_service_id}\n"
             f"Accounts/service: {settings.accounts_per_service}\n\n"
-            "Use /status to monitor live stages."
+            "System Online & Stable. Use /status to monitor."
         )
 
     async def handle_help(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -117,100 +117,80 @@ class AccountController:
 
         await update.message.reply_text("\n".join(lines))
 
-      # =========================================================
-    # LOGIN / OTP HELPER LOCATORS
+    # =========================================================
+    # LOGIN / OTP HELPER LOCATORS (CRASH PROOF)
     # =========================================================
 
     async def _find_mobile_input(self, page):
-        # EXTREMELY STRICT SELECTORS - Taaki Search Bar select na ho
         selectors = [
-            'input[type="tel"]', 
-            'input[inputmode="tel"]', 
-            'input[name="phone"]', 
-            'input[name="mobile"]',
-            'input[placeholder*="mobile" i]', 
-            'input[placeholder*="phone" i]'
+            'input[type="tel"]', 'input[inputmode="tel"]', 'input[name="phone"]', 
+            'input[placeholder*="mobile" i]', 'input[placeholder*="number" i]'
         ]
         for selector in selectors:
             try:
                 locator = page.locator(selector)
                 for index in range(await locator.count()):
                     item = locator.nth(index)
-                    if await item.is_visible(timeout=500): 
-                        # Extra Safety: Agar input box ke placeholder me "search" hai, toh usko ignore karo
-                        placeholder = await item.get_attribute("placeholder")
-                        if placeholder and "search" in placeholder.lower():
+                    if await item.is_visible(timeout=300):
+                        # Verify it's not the search bar
+                        ph = await item.get_attribute("placeholder")
+                        if ph and "search" in ph.lower():
                             continue
                         return item
-            except Exception: continue
+            except Exception: pass
         return None
 
-        async def _open_login_popup(self, page):
+    async def _open_login_popup(self, page):
         try:
             await self.browser.handle_location_popup(page)
             await page.wait_for_timeout(1000)
         except Exception: pass
 
-        # 1. Pehle try karo direct input mil jaye (agar popup pehle se khula ho)
+        # 1. Directly visible?
         mobile_input = await self._find_mobile_input(page)
         if mobile_input is not None: return mobile_input
 
-        # 2. Login / Sign Up buttons par click karne ki koshish
-        candidates = [page.get_by_text("Login / Sign Up", exact=True), page.get_by_text("Login", exact=True), page.get_by_role("button", name="Login")]
+        # 2. Safely click text buttons
+        candidates = [page.get_by_text("Login / Sign Up", exact=True), page.get_by_text("Login", exact=True), page.locator("button:has-text('Login')")]
         for candidate in candidates:
             try:
-                for index in range(await candidate.count()):
-                    item = candidate.nth(index)
-                    if await item.is_visible(timeout=500):
-                        await item.click(timeout=5000)
-                        await page.wait_for_timeout(1500)
-                        mobile_input = await self._find_mobile_input(page)
-                        if mobile_input is not None: return mobile_input
-            except Exception: continue
-
-        # 3. 🔥 AGGRESSIVE HEADER ICON CLICKING 🔥
-        # Ab hum header mein aakhiri element dhundhenge, jahan par profile icon hota hai
-        try:
-            # Header ke andar right side ke clickable elements dhoondho (buttons ya SVG icons)
-            header_controls = page.locator("header svg, header button, header [role='button']")
-            count = await header_controls.count()
-            
-            # Piche se (right side se) click karna shuru karo kyunki profile aakhiri me hota hai
-            for index in range(count - 1, -1, -1):
-                item = header_controls.nth(index)
-                if await item.is_visible(timeout=500):
-                    try:
-                        await item.click(timeout=5000, force=True) # Force click
-                    except Exception:
-                        pass # Ignore individual click errors
-                    
+                if await candidate.count() > 0 and await candidate.first.is_visible(timeout=300):
+                    await candidate.first.click(force=True, timeout=2000)
                     await page.wait_for_timeout(1500)
                     mobile_input = await self._find_mobile_input(page)
-                    if mobile_input is not None: 
-                        return mobile_input
+                    if mobile_input: return mobile_input
+            except Exception: pass
+
+        # 3. Crash-Proof Header Icon Clicker
+        try:
+            header_items = page.locator("header svg, header button, header .mantine-Avatar-image")
+            count = await header_items.count()
+            for index in range(count - 1, -1, -1):
+                try:
+                    item = header_items.nth(index)
+                    if await item.is_visible(timeout=300):
+                        await item.click(force=True, timeout=1500)
+                        await page.wait_for_timeout(1500)
+                        mobile_input = await self._find_mobile_input(page)
+                        if mobile_input: return mobile_input
+                except Exception: continue
         except Exception: pass
 
         return None
 
-
-
     async def _find_send_otp_button(self, page):
-        # BROADENED SELECTORS FOR CONTINUE BUTTON
         candidates = [
             page.get_by_role("button", name="Continue", exact=False),
-            page.get_by_role("button", name="Send OTP", exact=False),
             page.locator("button:has-text('Continue')"),
             page.locator("button:has-text('CONTINUE')"),
             page.locator("text=Continue"),
-            page.locator("text=Send OTP"),
-            page.locator("text=Get OTP")
+            page.locator("button:has-text('Send OTP')")
         ]
         for locator in candidates:
             try:
-                for index in range(await locator.count()):
-                    item = locator.nth(index)
-                    if await item.is_visible(timeout=500): return item
-            except Exception: continue
+                if await locator.count() > 0 and await locator.first.is_visible(timeout=300):
+                    return locator.first
+            except Exception: pass
         return None
 
     async def _find_otp_inputs(self, page):
@@ -229,12 +209,10 @@ class AccountController:
                 count = await locator.count()
                 for index in range(count):
                     item = locator.nth(index)
-                    if await item.is_visible(timeout=500):
+                    if await item.is_visible(timeout=300):
                         found.append(item)
-                if found:
-                    return found
-            except Exception:
-                continue
+                if found: return found
+            except Exception: continue
                 
         if not found:
             try:
@@ -242,29 +220,26 @@ class AccountController:
                 count = await inputs.count()
                 for i in range(count):
                     el = inputs.nth(i)
-                    if await el.is_visible(timeout=300):
+                    if await el.is_visible(timeout=200):
                         type_attr = await el.get_attribute("type")
                         if type_attr in ["tel", "number", "text"]:
                             found.append(el)
-                if len(found) >= 6:
-                    return found[:8] 
-            except Exception:
-                pass
+                if len(found) >= 6: return found[:8] 
+            except Exception: pass
                 
         return found
 
     async def _find_verify_button(self, page):
         candidates = [
+            page.locator("button:has-text('Verify')"),
             page.get_by_role("button", name="Verify Now", exact=False), 
-            page.get_by_text("Verify Now", exact=False), 
-            page.locator("button:has-text('Verify')")
+            page.get_by_text("Verify", exact=False)
         ]
         for locator in candidates:
             try:
-                for index in range(await locator.count()):
-                    item = locator.nth(index)
-                    if await item.is_visible(timeout=500): return item
-            except Exception: continue
+                if await locator.count() > 0 and await locator.first.is_visible(timeout=300):
+                    return locator.first
+            except Exception: pass
         return None
 
     # =========================================================
@@ -272,74 +247,77 @@ class AccountController:
     # =========================================================
 
     async def handle_login(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
-        args = context.args
-        if len(args) < 2: return await update.message.reply_text("❌ Format:\n/login S1-A1 9876543210")
-        slot_id, phone_number = args[0].upper(), args[1].strip()
-        
-        try: account = self.get_account(slot_id)
-        except ValueError as exc: return await update.message.reply_text(f"❌ {exc}")
-
-        if account.logged_in: return await update.message.reply_text(f"⚠️ {slot_id} is already logged in.")
-        if not phone_number.isdigit() or len(phone_number) != 10:
-            return await update.message.reply_text("❌ Enter a valid 10-digit Indian mobile number.")
-
         try:
+            args = context.args
+            if len(args) < 2: return await update.message.reply_text("❌ Format:\n/login S1-A1 9876543210")
+            slot_id, phone_number = args[0].upper(), args[1].strip()
+            
+            account = self.get_account(slot_id)
+            if account.logged_in: return await update.message.reply_text(f"⚠️ {slot_id} is already logged in.")
+            if not phone_number.isdigit() or len(phone_number) != 10:
+                return await update.message.reply_text("❌ Enter a valid 10-digit Indian mobile number.")
+
+            await update.message.reply_text(f"🔍 Starting login for {slot_id}...")
             page = await self.browser.open_product_page(slot_id)
             try: await self.browser.handle_location_popup(page); await page.wait_for_timeout(1000)
             except Exception: pass
 
             account.update(phone_number=phone_number, active=True, current_page="🔐 Handling Login", last_error=None)
+            
             mobile_input = await self._open_login_popup(page)
             if mobile_input is None: 
                 screenshot_path = self.screenshots_dir / f"{slot_id}_login_error.png"
                 await page.screenshot(path=str(screenshot_path), full_page=False)
-                await self.telegram.send_photo(photo_path=str(screenshot_path), caption=f"❌ Login popup didn't open. Checked screen.")
+                await self.telegram.send_photo(photo_path=str(screenshot_path), caption=f"❌ Login popup not opened.")
                 if screenshot_path.exists(): screenshot_path.unlink()
                 raise RuntimeError("Login popup not opened.")
             
             await mobile_input.focus()
-            await page.keyboard.type(phone_number, delay=100)
+            await page.keyboard.type(phone_number, delay=50)
             await page.wait_for_timeout(1000)
 
             send_otp_button = await self._find_send_otp_button(page)
             if send_otp_button is None: 
-                # Screenshot to debug why continue button isn't visible
                 error_ss = self.screenshots_dir / f"{slot_id}_continue_btn_err.png"
                 await page.screenshot(path=str(error_ss), full_page=False)
-                await self.telegram.send_photo(photo_path=str(error_ss), caption=f"❌ Continue button not found. Dekho number dala ya nahi!")
+                await self.telegram.send_photo(photo_path=str(error_ss), caption=f"❌ Continue button not found.")
                 if error_ss.exists(): error_ss.unlink()
                 raise RuntimeError("Continue button not found.")
             
             await send_otp_button.evaluate("(el) => { el.removeAttribute('disabled'); el.removeAttribute('data-disabled'); el.disabled = false; }")
-            await send_otp_button.click(force=True, timeout=5000)
+            await send_otp_button.click(force=True, timeout=3000)
 
-            for _ in range(30):
+            for _ in range(40): # Wait 20 seconds
                 await page.wait_for_timeout(500)
                 if await self._find_otp_inputs(page): break
-            else: raise RuntimeError("OTP popup did not appear.")
+            else: 
+                error_ss = self.screenshots_dir / f"{slot_id}_otp_popup_err.png"
+                await page.screenshot(path=str(error_ss), full_page=False)
+                await self.telegram.send_photo(photo_path=str(error_ss), caption=f"❌ OTP popup didn't appear.")
+                if error_ss.exists(): error_ss.unlink()
+                raise RuntimeError("OTP popup did not appear.")
 
             account.update(current_page="📩 OTP Sent. Waiting...", last_error=None)
             await update.message.reply_text(f"📩 OTP sent for {slot_id}.\nSend: /otp {slot_id} 123456")
         except Exception as exc:
-            account.update(last_error=str(exc), active=False)
+            try: account.update(last_error=str(exc), active=False)
+            except: pass
             await update.message.reply_text(f"❌ Login start failed: {exc}")
 
     async def handle_otp(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
-        args = context.args
-        if len(args) < 2: return await update.message.reply_text("❌ Format:\n/otp S1-A1 123456")
-        slot_id, otp = args[0].upper(), args[1].strip()
-        
-        try: account = self.get_account(slot_id)
-        except ValueError as exc: return await update.message.reply_text(f"❌ {exc}")
-
-        if len(otp) not in [6, 8] or not otp.isdigit():
-            return await update.message.reply_text("❌ OTP must be exactly 6 or 8 digits.")
-
         try:
+            args = context.args
+            if len(args) < 2: return await update.message.reply_text("❌ Format:\n/otp S1-A1 123456")
+            slot_id, otp = args[0].upper(), args[1].strip()
+            
+            account = self.get_account(slot_id)
+            if len(otp) not in [6, 8] or not otp.isdigit():
+                return await update.message.reply_text("❌ OTP must be exactly 6 or 8 digits.")
+
             page = await self.browser.get_page(slot_id)
             
             otp_inputs = []
-            for attempt in range(15):
+            for attempt in range(20):
                 otp_inputs = await self._find_otp_inputs(page)
                 if otp_inputs and (len(otp_inputs) == 1 or len(otp_inputs) >= len(otp)):
                     break
@@ -350,14 +328,14 @@ class AccountController:
 
             if len(otp_inputs) == 1: 
                 await otp_inputs[0].focus()
-                await page.keyboard.type(otp, delay=100)
+                await page.keyboard.type(otp, delay=50)
             else:
                 boxes = otp_inputs[:len(otp)]
                 for i, digit in enumerate(otp):
                     if i < len(boxes):
                         await boxes[i].focus()
                         await page.keyboard.press(digit)
-                        await page.wait_for_timeout(100)
+                        await page.wait_for_timeout(50)
 
             await page.wait_for_timeout(1000) 
             
@@ -366,7 +344,7 @@ class AccountController:
                 raise RuntimeError("Verify button not found.")
                 
             await verify_button.evaluate("(el) => { el.removeAttribute('disabled'); el.removeAttribute('data-disabled'); el.disabled = false; }")
-            await verify_button.click(force=True, timeout=5000)
+            await verify_button.click(force=True, timeout=3000)
             await page.wait_for_timeout(3500)
 
             page = await self.browser.ensure_product_page(slot_id)
@@ -375,16 +353,16 @@ class AccountController:
             await update.message.reply_text(f"✅ Login successful for {slot_id}.")
             
         except Exception as exc:
-            account.update(last_error=str(exc))
+            try: account.update(last_error=str(exc))
+            except: pass
             await update.message.reply_text(f"❌ OTP failed: {exc}")
 
     async def handle_screen(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
-        if not context.args: return await update.message.reply_text("❌ Format:\n/screen S1-A1")
-        slot_id = context.args[0].upper()
-        try: account = self.get_account(slot_id)
-        except ValueError as exc: return await update.message.reply_text(f"❌ {exc}")
-
         try:
+            if not context.args: return await update.message.reply_text("❌ Format:\n/screen S1-A1")
+            slot_id = context.args[0].upper()
+            account = self.get_account(slot_id)
+
             page = await self.browser.ensure_product_page(slot_id)
             screenshot_path = self.screenshots_dir / f"{slot_id}.png"
             await page.screenshot(path=str(screenshot_path), full_page=False)
@@ -392,16 +370,16 @@ class AccountController:
             await self.telegram.send_photo(photo_path=str(screenshot_path), caption=f"🖥 {slot_id}\nPage: {page.url}")
             if screenshot_path.exists(): screenshot_path.unlink()
         except Exception as exc:
-            account.update(last_error=str(exc))
+            try: account.update(last_error=str(exc))
+            except: pass
             await update.message.reply_text(f"❌ Screenshot failed: {exc}")
 
     async def handle_refresh(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
-        if not context.args: return await update.message.reply_text("❌ Format:\n/refresh S1-A1")
-        slot_id = context.args[0].upper()
-        try: account = self.get_account(slot_id)
-        except ValueError as exc: return await update.message.reply_text(f"❌ {exc}")
-
         try:
+            if not context.args: return await update.message.reply_text("❌ Format:\n/refresh S1-A1")
+            slot_id = context.args[0].upper()
+            account = self.get_account(slot_id)
+
             page = await self.browser.get_page(slot_id)
             cb = int(time.time())
             fresh_url = f"{settings.product_url}?cb={cb}" if "?" not in settings.product_url else f"{settings.product_url}&cb={cb}"
@@ -409,13 +387,14 @@ class AccountController:
             account.update(current_page="🔄 Manually Refreshed", last_error=None)
             await update.message.reply_text(f"🔄 Hard Refreshed {slot_id}")
         except Exception as exc:
-            account.update(last_error=str(exc))
+            try: account.update(last_error=str(exc))
+            except: pass
             await update.message.reply_text(f"❌ Refresh failed: {exc}")
 
     async def handle_logout(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
-        if not context.args: return await update.message.reply_text("❌ Format:\n/logout S1-A1")
-        slot_id = context.args[0].upper()
         try:
+            if not context.args: return await update.message.reply_text("❌ Format:\n/logout S1-A1")
+            slot_id = context.args[0].upper()
             account = self.get_account(slot_id)
             await self.browser.logout_slot(slot_id)
             account.update(phone_number=None, logged_in=False, active=False, current_page="unknown", last_error=None, wallet_balance=None)
@@ -435,29 +414,26 @@ class AccountController:
             await self.telegram.send_message(f"🎯 Sniper ACTIVATED for {slot_id}. 30-sec Auto-Refresh running...")
 
             while True:
-                account.update(last_error=None)
+                try:
+                    account.update(last_error=None)
 
-                # -----------------------------
-                # 1. 30-SECOND WAIT PHASE
-                # -----------------------------
-                account.update(current_page="⏳ [STAGE: 30s Wait / Idle]")
-                try:
-                    await asyncio.wait_for(self.stock_event.wait(), timeout=30.0)
-                    self.stock_event.clear() 
-                    account.update(current_page="⚡ [STAGE: Manual Trigger Received]")
-                except asyncio.TimeoutError:
-                    pass
-                
-                try:
-                    # -----------------------------
+                    # 1. 30-SECOND WAIT PHASE
+                    account.update(current_page="⏳ [STAGE: 30s Wait / Idle]")
+                    try:
+                        await asyncio.wait_for(self.stock_event.wait(), timeout=30.0)
+                        self.stock_event.clear() 
+                        account.update(current_page="⚡ [STAGE: Manual Trigger Received]")
+                    except asyncio.TimeoutError:
+                        pass
+                    
                     # 2. ANTI-CACHE HARD REFRESH
-                    # -----------------------------
                     account.update(current_page="🔄 [STAGE: Hard Refreshing Page]")
                     cache_buster = int(time.time())
                     fresh_url = f"{settings.product_url}?cb={cache_buster}" if "?" not in settings.product_url else f"{settings.product_url}&cb={cache_buster}"
                     
                     await page.goto(fresh_url, wait_until="domcontentloaded", timeout=30000)
-                    await self.browser.handle_location_popup(page)
+                    try: await self.browser.handle_location_popup(page)
+                    except: pass
                     await page.wait_for_timeout(2000) 
 
                     content = await page.content()
@@ -466,17 +442,14 @@ class AccountController:
                         await asyncio.sleep(5)
                         continue
                     
-                    # -----------------------------
                     # 3. AGGRESSIVE 5000 SELECTION
-                    # -----------------------------
                     account.update(current_page="🎯 [STAGE: Selecting Rs.5000]")
                     rs_5000_locator = page.locator("text=Rs.5000 Wallet Code >> visible=true")
                     
                     if await rs_5000_locator.count() > 0:
-                        target = rs_5000_locator.first
                         try:
-                            await target.click(force=True, timeout=3000)
-                            await target.evaluate("(el) => { if(el.parentElement) el.parentElement.click(); }")
+                            await rs_5000_locator.first.click(force=True, timeout=3000)
+                            await rs_5000_locator.first.evaluate("(el) => { if(el.parentElement) el.parentElement.click(); }")
                         except Exception as click_err:
                             account.update(last_error=f"Selection Click Error: {str(click_err)[:50]}")
                     else:
@@ -492,12 +465,12 @@ class AccountController:
                             
                     await page.wait_for_timeout(1500) 
                     
-                    # -----------------------------
                     # 4. STOCK CHECK RADAR
-                    # -----------------------------
                     account.update(current_page="🔍 [STAGE: Checking for Pay Button]")
                     pay_btn_1 = page.locator("button >> text='Pay via wallet' >> visible=true").first
-                    is_in_stock = await pay_btn_1.is_visible(timeout=3000)
+                    is_in_stock = False
+                    try: is_in_stock = await pay_btn_1.is_visible(timeout=3000)
+                    except: pass
                     
                     if not is_in_stock:
                         account.update(current_page="😴 [STAGE: Out of Stock, Looping]")
@@ -540,19 +513,20 @@ class AccountController:
                             wallet_balance_text = "Balance info not found"
                             try:
                                 balance_locator = page.locator("text=/Wallet Balance:/i >> visible=true").first
-                                if await balance_locator.is_visible(timeout=3000):
+                                if await balance_locator.is_visible(timeout=2000):
                                     wallet_balance_text = await balance_locator.inner_text()
-                            except Exception:
-                                pass
+                            except Exception: pass
 
                             account.update(current_page="📸 [STAGE: Taking Verification Screenshot]")
                             screenshot_path = self.screenshots_dir / f"{slot_id}_pre_buy_qty_{target_qty}.png"
-                            await page.screenshot(path=str(screenshot_path), full_page=False)
-                            await self.telegram.send_photo(
-                                photo_path=str(screenshot_path),
-                                caption=(f"🛒 ATTEMPTING BUY (Qty {target_qty})!\n\nSlot: {slot_id}\nBalance Info: {wallet_balance_text}")
-                            )
-                            if screenshot_path.exists(): screenshot_path.unlink()
+                            try:
+                                await page.screenshot(path=str(screenshot_path), full_page=False)
+                                await self.telegram.send_photo(
+                                    photo_path=str(screenshot_path),
+                                    caption=(f"🛒 ATTEMPTING BUY (Qty {target_qty})!\n\nSlot: {slot_id}\nBalance Info: {wallet_balance_text}")
+                                )
+                                if screenshot_path.exists(): screenshot_path.unlink()
+                            except: pass
 
                             if "insufficient" in wallet_balance_text.lower() or "add money" in wallet_balance_text.lower():
                                 account.update(current_page="🛑 [STAGE: Stopped - Insufficient Funds]")
@@ -586,8 +560,7 @@ class AccountController:
                                 await page.screenshot(path=str(error_ss), full_page=False)
                                 await self.telegram.send_photo(photo_path=str(error_ss), caption=f"⚠️ Failed Qty {target_qty} for {slot_id}")
                                 if error_ss.exists(): error_ss.unlink()
-                            except Exception:
-                                pass
+                            except Exception: pass
                                 
                             if target_qty == 2:
                                 await self.telegram.send_message(f"🔄 {slot_id} retrying with Quantity 1...")
@@ -611,35 +584,38 @@ class AccountController:
     # =========================================================
     
     async def handle_sniper_mode(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
-        args = context.args
-        if len(args) < 1: 
-            await update.message.reply_text("❌ Format: /sniper S1-A1 (or 'all')")
-            return
-            
-        target = args[0].lower()
+        try:
+            args = context.args
+            if len(args) < 1: 
+                await update.message.reply_text("❌ Format: /sniper S1-A1 (or 'all')")
+                return
+                
+            target = args[0].lower()
 
-        if target == "all":
-            started = 0
-            for slot_id, acc in self.accounts.items():
-                if acc.logged_in and slot_id not in self.sniper_tasks:
-                    task = asyncio.create_task(self._sniper_worker(slot_id))
-                    self.sniper_tasks[slot_id] = task
-                    started += 1
-            await update.message.reply_text(f"🔫 Sniper started for {started} active accounts!")
-        else:
-            slot_id = target.upper()
-            try:
-                acc = self.get_account(slot_id)
-                if acc.logged_in and slot_id not in self.sniper_tasks:
-                    task = asyncio.create_task(self._sniper_worker(slot_id))
-                    self.sniper_tasks[slot_id] = task
-                    await update.message.reply_text(f"🔫 Sniper started for {slot_id}")
-                elif not acc.logged_in:
-                    await update.message.reply_text(f"⚠️ {slot_id} is not logged in.")
-                else:
-                    await update.message.reply_text(f"⚠️ Sniper already running for {slot_id}.")
-            except ValueError as exc:
-                await update.message.reply_text(f"❌ {exc}")
+            if target == "all":
+                started = 0
+                for slot_id, acc in self.accounts.items():
+                    if acc.logged_in and slot_id not in self.sniper_tasks:
+                        task = asyncio.create_task(self._sniper_worker(slot_id))
+                        self.sniper_tasks[slot_id] = task
+                        started += 1
+                await update.message.reply_text(f"🔫 Sniper started for {started} active accounts!")
+            else:
+                slot_id = target.upper()
+                try:
+                    acc = self.get_account(slot_id)
+                    if acc.logged_in and slot_id not in self.sniper_tasks:
+                        task = asyncio.create_task(self._sniper_worker(slot_id))
+                        self.sniper_tasks[slot_id] = task
+                        await update.message.reply_text(f"🔫 Sniper started for {slot_id}")
+                    elif not acc.logged_in:
+                        await update.message.reply_text(f"⚠️ {slot_id} is not logged in.")
+                    else:
+                        await update.message.reply_text(f"⚠️ Sniper already running for {slot_id}.")
+                except ValueError as exc:
+                    await update.message.reply_text(f"❌ {exc}")
+        except Exception as exc:
+            await update.message.reply_text(f"❌ Sniper Command Error: {exc}")
 
     async def trigger_stock_buy(self):
         self.stock_event.set()
