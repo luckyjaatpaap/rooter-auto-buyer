@@ -68,6 +68,7 @@ class AccountController:
         self.telegram.register_command("screen", self.handle_screen)
         self.telegram.register_command("refresh", self.handle_refresh)
         self.telegram.register_command("help", self.handle_help)
+        # Ensure these are registered
         self.telegram.register_command("sniper", self.handle_sniper_mode)
         self.telegram.register_command("trigger_buy", self.handle_trigger_buy)
 
@@ -122,7 +123,10 @@ class AccountController:
     # =========================================================
 
     async def _find_mobile_input(self, page):
-        selectors = ['input[type="tel"]', 'input[inputmode="tel"]', 'input[name="phone"]', 'input[placeholder*="mobile" i]']
+        selectors = [
+            'input[type="tel"]', 'input[inputmode="tel"]', 'input[name="phone"]', 
+            'input[placeholder*="mobile" i]', 'input[placeholder*="number" i]', 'input.mantine-Input-input'
+        ]
         for selector in selectors:
             try:
                 locator = page.locator(selector)
@@ -138,49 +142,39 @@ class AccountController:
             await page.wait_for_timeout(1000)
         except Exception: pass
 
+        # Pehle try karo direct input mil jaye
         mobile_input = await self._find_mobile_input(page)
         if mobile_input is not None: return mobile_input
 
-        candidates = [page.get_by_text("Login / Sign Up", exact=True), page.get_by_text("Login", exact=True)]
+        # Phir Login/Sign Up buttons dhundho aur click karo
+        candidates = [page.get_by_text("Login / Sign Up", exact=True), page.get_by_text("Login", exact=True), page.get_by_role("button", name="Login")]
         for candidate in candidates:
             try:
                 for index in range(await candidate.count()):
                     item = candidate.nth(index)
                     if await item.is_visible(timeout=500):
                         await item.click(timeout=5000)
-                        await page.wait_for_timeout(1200)
+                        await page.wait_for_timeout(1500)
                         mobile_input = await self._find_mobile_input(page)
                         if mobile_input is not None: return mobile_input
             except Exception: continue
 
+        # Header me profile/login button
         try:
-            header_controls = page.locator("header button, header [role='button'], header a")
+            header_controls = page.locator("header button, header [role='button'], header a, header img[alt*='profile']")
             for index in range(await header_controls.count() - 1, -1, -1):
                 item = header_controls.nth(index)
                 if await item.is_visible(timeout=500):
                     await item.click(timeout=5000)
-                    await page.wait_for_timeout(1200)
+                    await page.wait_for_timeout(1500)
                     mobile_input = await self._find_mobile_input(page)
                     if mobile_input is not None: return mobile_input
         except Exception: pass
 
-        profile_selectors = ['[aria-label*="profile" i]', 'img[alt*="profile" i]']
-        for selector in profile_selectors:
-            try:
-                locator = page.locator(selector)
-                for index in range(await locator.count()):
-                    item = locator.nth(index)
-                    if await item.is_visible(timeout=500):
-                        try: await item.click(timeout=5000)
-                        except Exception: await item.locator("..").click(timeout=3000)
-                        await page.wait_for_timeout(1200)
-                        mobile_input = await self._find_mobile_input(page)
-                        if mobile_input is not None: return mobile_input
-            except Exception: continue
         return None
 
     async def _find_send_otp_button(self, page):
-        candidates = [page.get_by_role("button", name="Continue", exact=True), page.get_by_role("button", name="Send OTP", exact=True)]
+        candidates = [page.get_by_role("button", name="Continue", exact=True), page.get_by_role("button", name="Send OTP", exact=True), page.locator("button:has-text('Continue')")]
         for locator in candidates:
             try:
                 for index in range(await locator.count()):
@@ -230,7 +224,7 @@ class AccountController:
         return found
 
     async def _find_verify_button(self, page):
-        candidates = [page.get_by_role("button", name="Verify Now", exact=True), page.get_by_text("Verify Now", exact=True)]
+        candidates = [page.get_by_role("button", name="Verify Now", exact=True), page.get_by_text("Verify Now", exact=True), page.locator("button:has-text('Verify Now')")]
         for locator in candidates:
             try:
                 for index in range(await locator.count()):
@@ -262,9 +256,14 @@ class AccountController:
 
             account.update(phone_number=phone_number, active=True, current_page="🔐 Handling Login", last_error=None)
             mobile_input = await self._open_login_popup(page)
-            if mobile_input is None: raise RuntimeError("Login popup not opened.")
+            if mobile_input is None: 
+                # Screenshot le kar dekho
+                screenshot_path = self.screenshots_dir / f"{slot_id}_login_error.png"
+                await page.screenshot(path=str(screenshot_path), full_page=False)
+                await self.telegram.send_photo(photo_path=str(screenshot_path), caption=f"❌ Login popup didn't open. Checked screen.")
+                if screenshot_path.exists(): screenshot_path.unlink()
+                raise RuntimeError("Login popup not opened.")
             
-            # 🚀 HUMAN TYPING FOR MOBILE NUMBER (Bypass React checks)
             await mobile_input.focus()
             await page.keyboard.type(phone_number, delay=100)
             await page.wait_for_timeout(1000)
@@ -272,7 +271,6 @@ class AccountController:
             send_otp_button = await self._find_send_otp_button(page)
             if send_otp_button is None: raise RuntimeError("Continue button not found.")
             
-            # 🚀 FORCE UNLOCK AND CLICK SEND OTP BUTTON
             await send_otp_button.evaluate("(el) => { el.removeAttribute('disabled'); el.removeAttribute('data-disabled'); el.disabled = false; }")
             await send_otp_button.click(force=True, timeout=5000)
 
@@ -301,7 +299,6 @@ class AccountController:
         try:
             page = await self.browser.get_page(slot_id)
             
-            # AGGRESSIVE RETRY LOGIC FOR OTP FIELDS
             otp_inputs = []
             for attempt in range(15):
                 otp_inputs = await self._find_otp_inputs(page)
@@ -312,7 +309,6 @@ class AccountController:
             if not otp_inputs: 
                 raise RuntimeError("OTP fields not found on the page.")
 
-            # 🚀 HUMAN TYPING SIMULATION FOR OTP
             if len(otp_inputs) == 1: 
                 await otp_inputs[0].focus()
                 await page.keyboard.type(otp, delay=100)
@@ -330,7 +326,6 @@ class AccountController:
             if verify_button is None: 
                 raise RuntimeError("Verify button not found.")
                 
-            # 🚀 FORCE ENABLE VERIFY BUTTON & CLICK
             await verify_button.evaluate("(el) => { el.removeAttribute('disabled'); el.removeAttribute('data-disabled'); el.disabled = false; }")
             await verify_button.click(force=True, timeout=5000)
             await page.wait_for_timeout(3500)
@@ -578,7 +573,10 @@ class AccountController:
     
     async def handle_sniper_mode(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         args = context.args
-        if len(args) < 1: return await update.message.reply_text("❌ Format: /sniper S1-A1 (or 'all')")
+        if len(args) < 1: 
+            await update.message.reply_text("❌ Format: /sniper S1-A1 (or 'all')")
+            return
+            
         target = args[0].lower()
 
         if target == "all":
