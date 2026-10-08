@@ -68,7 +68,6 @@ class AccountController:
         self.telegram.register_command("screen", self.handle_screen)
         self.telegram.register_command("refresh", self.handle_refresh)
         self.telegram.register_command("help", self.handle_help)
-        # Ensure these are registered
         self.telegram.register_command("sniper", self.handle_sniper_mode)
         self.telegram.register_command("trigger_buy", self.handle_trigger_buy)
 
@@ -142,11 +141,9 @@ class AccountController:
             await page.wait_for_timeout(1000)
         except Exception: pass
 
-        # Pehle try karo direct input mil jaye
         mobile_input = await self._find_mobile_input(page)
         if mobile_input is not None: return mobile_input
 
-        # Phir Login/Sign Up buttons dhundho aur click karo
         candidates = [page.get_by_text("Login / Sign Up", exact=True), page.get_by_text("Login", exact=True), page.get_by_role("button", name="Login")]
         for candidate in candidates:
             try:
@@ -159,7 +156,6 @@ class AccountController:
                         if mobile_input is not None: return mobile_input
             except Exception: continue
 
-        # Header me profile/login button
         try:
             header_controls = page.locator("header button, header [role='button'], header a, header img[alt*='profile']")
             for index in range(await header_controls.count() - 1, -1, -1):
@@ -174,7 +170,16 @@ class AccountController:
         return None
 
     async def _find_send_otp_button(self, page):
-        candidates = [page.get_by_role("button", name="Continue", exact=True), page.get_by_role("button", name="Send OTP", exact=True), page.locator("button:has-text('Continue')")]
+        # BROADENED SELECTORS FOR CONTINUE BUTTON
+        candidates = [
+            page.get_by_role("button", name="Continue", exact=False),
+            page.get_by_role("button", name="Send OTP", exact=False),
+            page.locator("button:has-text('Continue')"),
+            page.locator("button:has-text('CONTINUE')"),
+            page.locator("text=Continue"),
+            page.locator("text=Send OTP"),
+            page.locator("text=Get OTP")
+        ]
         for locator in candidates:
             try:
                 for index in range(await locator.count()):
@@ -224,7 +229,11 @@ class AccountController:
         return found
 
     async def _find_verify_button(self, page):
-        candidates = [page.get_by_role("button", name="Verify Now", exact=True), page.get_by_text("Verify Now", exact=True), page.locator("button:has-text('Verify Now')")]
+        candidates = [
+            page.get_by_role("button", name="Verify Now", exact=False), 
+            page.get_by_text("Verify Now", exact=False), 
+            page.locator("button:has-text('Verify')")
+        ]
         for locator in candidates:
             try:
                 for index in range(await locator.count()):
@@ -257,7 +266,6 @@ class AccountController:
             account.update(phone_number=phone_number, active=True, current_page="🔐 Handling Login", last_error=None)
             mobile_input = await self._open_login_popup(page)
             if mobile_input is None: 
-                # Screenshot le kar dekho
                 screenshot_path = self.screenshots_dir / f"{slot_id}_login_error.png"
                 await page.screenshot(path=str(screenshot_path), full_page=False)
                 await self.telegram.send_photo(photo_path=str(screenshot_path), caption=f"❌ Login popup didn't open. Checked screen.")
@@ -269,7 +277,13 @@ class AccountController:
             await page.wait_for_timeout(1000)
 
             send_otp_button = await self._find_send_otp_button(page)
-            if send_otp_button is None: raise RuntimeError("Continue button not found.")
+            if send_otp_button is None: 
+                # Screenshot to debug why continue button isn't visible
+                error_ss = self.screenshots_dir / f"{slot_id}_continue_btn_err.png"
+                await page.screenshot(path=str(error_ss), full_page=False)
+                await self.telegram.send_photo(photo_path=str(error_ss), caption=f"❌ Continue button not found. Dekho number dala ya nahi!")
+                if error_ss.exists(): error_ss.unlink()
+                raise RuntimeError("Continue button not found.")
             
             await send_otp_button.evaluate("(el) => { el.removeAttribute('disabled'); el.removeAttribute('data-disabled'); el.disabled = false; }")
             await send_otp_button.click(force=True, timeout=5000)
