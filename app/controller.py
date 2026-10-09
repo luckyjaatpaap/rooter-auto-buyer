@@ -430,8 +430,10 @@ class AccountController:
                 try:
                     account.update(last_error=None)
 
-                    # 1. 30-SECOND WAIT PHASE
-                    account.update(current_page="⏳ [STAGE: 30s Wait / Idle]")
+                    # 1. 30-SECOND WAIT PHASE WITH TIMESTAMP 🔥
+                    last_time = datetime.now().strftime("%I:%M:%S %p")
+                    account.update(current_page=f"⏳ [STAGE: 30s Wait] (Last Checked: {last_time})")
+                    
                     try:
                         await asyncio.wait_for(self.stock_event.wait(), timeout=30.0)
                         self.stock_event.clear() 
@@ -486,7 +488,9 @@ class AccountController:
                     except: pass
                     
                     if not is_in_stock:
+                        # Thoda ruk kar update dikhayega taaki tu padh sake
                         account.update(current_page="😴 [STAGE: Out of Stock, Looping]")
+                        await asyncio.sleep(2) 
                         continue
 
                     # ==========================================
@@ -591,6 +595,7 @@ class AccountController:
             account.update(current_page="☠️ FATAL CRASH")
             await self.telegram.send_message(f"❌ Sniper worker critically crashed for {slot_id}: {str(e)}")
             self.sniper_tasks.pop(slot_id, None)
+
 
     # =========================================================
     # START / STOP SNIPER & MANUAL TRIGGER
