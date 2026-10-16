@@ -508,15 +508,40 @@ class AccountController:
             slot_id = context.args[0].upper()
             account = self.get_account(slot_id)
 
+            # 1. Sniper task ko rokna
             task = self.sniper_tasks.pop(slot_id, None)
             if task and not task.done():
                 task.cancel()
 
-            await self.browser.logout_slot(slot_id)
-            account.update(phone_number=None, logged_in=False, active=False, current_page="unknown", last_error=None, wallet_balance=None)
-            await update.message.reply_text(f"🚪 Logged out & session cleared for {slot_id}")
+            # 2. Browser RAM se tab/context permanently close karna
+            await self.browser.close_slot(slot_id)
+
+            # 3. Volume se session data aur files delete karna
+            self.browser.sessions.delete_session(slot_id)
+            
+            # Extra: Meta file (phone number) bhi delete karna agar ho toh
+            try:
+                session_dir = self.browser.sessions.session_path(slot_id)
+                meta_file = session_dir / "meta.json"
+                if meta_file.exists():
+                    meta_file.unlink()
+            except Exception:
+                pass
+
+            # State ko fresh reset karna
+            account.update(
+                phone_number=None,
+                logged_in=False,
+                active=False,
+                current_page="unknown",
+                last_error=None,
+                wallet_balance=None
+            )
+            
+            await update.message.reply_text(f"🚪 Successfully logged out & RAM freed for {slot_id}. Slot is now fresh for a new account!")
         except Exception as exc:
             await update.message.reply_text(f"❌ Logout failed: {exc}")
+
 
     # =========================================================
     # 🎯 SWARM ATTACK SNIPER BACKGROUND WORKER (SELF-HEALING)
