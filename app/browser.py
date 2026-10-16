@@ -1,5 +1,5 @@
+import json
 from typing import Dict
-
 from playwright.async_api import (
     Browser,
     BrowserContext,
@@ -14,39 +14,58 @@ from .sessions import SessionManager
 
 class BrowserManager:
 
-    # =========================================================
-    # REAL DESKTOP WINDOW
-    # =========================================================
-
     WINDOW_WIDTH = 1200
     WINDOW_HEIGHT = 675
 
     def __init__(self):
         self.playwright: Playwright | None = None
         self.browser: Browser | None = None
-
         self.contexts: Dict[str, BrowserContext] = {}
-
         self.sessions = SessionManager()
 
     async def start(self):
+        if self.playwright is None:
+            self.playwright = await async_playwright().start()
 
-        self.playwright = await async_playwright().start()
+        if self.browser is None or not self.browser.is_connected():
+            self.browser = await self.playwright.chromium.launch(
+                headless=True,
+                args=[
+                    "--no-sandbox",
+                    "--disable-dev-shm-usage",
+                    "--disable-gpu",
+                    "--window-size=1200,675",
+                    "--force-device-scale-factor=1",
+                    "--disable-features=Translate,OptimizationHints,MediaRouter,DialMediaRouteProvider",
+                    "--disable-extensions",
+                    "--disable-background-networking",
+                    "--disable-sync",
+                    "--disable-default-apps",
+                    "--metrics-recording-only",
+                    "--mute-audio",
+                    "--no-first-run",
+                    "--js-flags=--max-old-space-size=512",
+                ],
+            )
 
-        self.browser = await self.playwright.chromium.launch(
-            headless=True,
-            args=[
-                "--no-sandbox",
-                "--disable-dev-shm-usage",
-                "--disable-gpu",
-                "--window-size=1200,675",
-                "--force-device-scale-factor=1",
-                "--disable-features=Translate",
-            ],
-        )
+    async def ensure_browser_alive(self):
+        """Agar Chromium crash ya close ho jaye, toh turant naya browser start karega."""
+        try:
+            if self.browser is None or not self.browser.is_connected():
+                self.contexts.clear()
+                await self.start()
+        except Exception:
+            self.contexts.clear()
+            try:
+                if self.playwright:
+                    await self.playwright.stop()
+            except Exception:
+                pass
+            self.playwright = None
+            self.browser = None
+            await self.start()
 
     def context_options(self):
-
         return {
             "viewport": None,
             "screen": {
@@ -59,88 +78,82 @@ class BrowserManager:
             "timezone_id": "Asia/Kolkata",
         }
 
-    async def get_context(
-        self,
-        slot_id: str,
-    ) -> BrowserContext:
+    async def get_context(self, slot_id: str) -> BrowserContext:
+        await self.ensure_browser_alive()
 
         if slot_id in self.contexts:
-            return self.contexts[slot_id]
+            ctx = self.contexts[slot_id]
+            try:
+                # Check if context is alive
+                _ = ctx.pages
+                return ctx
+            except Exception:
+                self.contexts.pop(slot_id, None)
 
-        if self.browser is None:
-            raise RuntimeError(
-                "BrowserManager is not started"
-            )
-
-        session_dir = self.sessions.session_path(
-            slot_id
-        )
-
-        storage_file = (
-            session_dir / "storage_state.json"
-        )
-
+        session_dir = self.sessions.session_path(slot_id)
+        storage_file = session_dir / "storage_state.json"
         options = self.context_options()
 
-        if storage_file.exists():
-
-            context = await self.browser.new_context(
-                storage_state=str(storage_file),
-                **options,
-            )
-
+        if storage_file.exists() and storage_file.stat().st_size > 10:
+            try:
+                context = await self.browser.new_context(
+                    storage_state=str(storage_file),
+                    **options,
+                )
+            except Exception:
+                context = await self.browser.new_context(**options)
         else:
-
-            context = await self.browser.new_context(
-                **options,
-            )
+            context = await self.browser.new_context(**options)
 
         self.contexts[slot_id] = context
-
         return context
 
-    async def get_page(
-        self,
-        slot_id: str,
-    ) -> Page:
+    async def get_page(self, slot_id: str) -> Page:
+        context = await self.get_context(slot_id)
 
-        context = await self.get_context(
-            slot_id
-        )
+        try:
+            valid_pages = [p for p in context.pages if not p.is_closed()]
+            if valid_pages:
+                # Faltu extra tabs खुले hon toh band kar do (Memory Bachao)
+                for extra_page in valid_pages[1:]:
+                    try:
+                        await extra_page.close()
+                    except Exception:
+                        pass
+                return valid_pages[0]
+            return await context.new_page()
+        except Exception:
+            self.contexts.pop(slot_id, None)
+            context = await self.get_context(slot_id)
+            return await context.new_page()
 
-        pages = context.pages
-
-        if pages:
-            return pages[0]
-
-        return await context.new_page()
+    async def reset_slot_page(self, slot_id: str) -> Page:
+        """Tab aur context ko safely close karke fresh tab banata hai (RAM Clean)."""
+        try:
+            ctx = self.contexts.pop(slot_id, None)
+            if ctx:
+                await ctx.close()
+        except Exception:
+            pass
+        return await self.get_page(slot_id)
 
     # =========================================================
     # ROOTER LOCATION POPUP
     # =========================================================
 
-    async def handle_location_popup(
-        self,
-        page: Page,
-    ) -> bool:
-
+    async def handle_location_popup(self, page: Page) -> bool:
         try:
+            await page.wait_for_timeout(500)
 
-            await page.wait_for_timeout(800)
-
-            locator = page.get_by_text(
-                "No, stay on this site",
-                exact=True,
-            )
-
+            locator = page.get_by_text("No, stay on this site", exact=True)
             count = await locator.count()
 
             for index in range(count):
                 try:
                     element = locator.nth(index)
-                    if await element.is_visible(timeout=1000):
-                        await element.click(timeout=5000)
-                        await page.wait_for_timeout(1000)
+                    if await element.is_visible(timeout=800):
+                        await element.click(timeout=3000)
+                        await page.wait_for_timeout(500)
                         return True
                 except Exception:
                     continue
@@ -151,72 +164,45 @@ class BrowserManager:
             for index in range(button_count):
                 try:
                     button = buttons.nth(index)
-                    if not await button.is_visible(timeout=500):
+                    if not await button.is_visible(timeout=300):
                         continue
 
-                    text = await button.inner_text(timeout=1000)
+                    text = await button.inner_text(timeout=800)
                     text = " ".join(text.split()).strip().lower()
 
                     if text == "no, stay on this site":
-                        await button.click(timeout=5000)
-                        await page.wait_for_timeout(1000)
-                        return True
-                except Exception:
-                    continue
-
-            locator = page.locator("text=No, stay on this site")
-            count = await locator.count()
-
-            for index in range(count):
-                try:
-                    element = locator.nth(index)
-                    if await element.is_visible(timeout=500):
-                        await element.click(timeout=5000)
-                        await page.wait_for_timeout(1000)
+                        await button.click(timeout=3000)
+                        await page.wait_for_timeout(500)
                         return True
                 except Exception:
                     continue
 
             return False
-
         except Exception:
             return False
 
     # =========================================================
-    # OPEN PLAYSTATION PRODUCT
+    # OPEN & ENSURE PLAYSTATION PRODUCT
     # =========================================================
 
-    async def open_product_page(
-        self,
-        slot_id: str,
-    ) -> Page:
-
+    async def open_product_page(self, slot_id: str) -> Page:
         page = await self.get_page(slot_id)
-
         await page.goto(
             settings.product_url,
             wait_until="domcontentloaded",
-            timeout=60000,
+            timeout=45000,
         )
-
         await self.handle_location_popup(page)
-        await page.wait_for_timeout(2000)
-        await page.evaluate("window.scrollTo(0, 0)")
-
+        await page.wait_for_timeout(1500)
+        try:
+            await page.evaluate("window.scrollTo(0, 0)")
+        except Exception:
+            pass
         return page
 
-    # =========================================================
-    # ENSURE PLAYSTATION PAGE
-    # =========================================================
-
-    async def ensure_product_page(
-        self,
-        slot_id: str,
-    ) -> Page:
-
+    async def ensure_product_page(self, slot_id: str) -> Page:
         page = await self.get_page(slot_id)
         current_url = page.url or ""
-
         product_path = "shop.rooter.gg/product/playstation-gift-cards"
 
         if (
@@ -227,68 +213,73 @@ class BrowserManager:
             page = await self.open_product_page(slot_id)
         else:
             await self.handle_location_popup(page)
-            await page.evaluate("window.scrollTo(0, 0)")
+            try:
+                await page.evaluate("window.scrollTo(0, 0)")
+            except Exception:
+                pass
 
         return page
 
     # =========================================================
-    # SAVE SESSION
+    # SAVE SESSION + PHONE METADATA
     # =========================================================
 
-    async def save_session(
-        self,
-        slot_id: str,
-    ):
-
+    async def save_session(self, slot_id: str, phone_number: str | None = None):
         context = self.contexts.get(slot_id)
         if context is None:
             return
-
         session_dir = self.sessions.session_path(slot_id)
         storage_file = session_dir / "storage_state.json"
+        try:
+            await context.storage_state(path=str(storage_file))
+        except Exception:
+            pass
 
-        await context.storage_state(path=str(storage_file))
+        if phone_number:
+            meta_file = session_dir / "meta.json"
+            try:
+                meta_file.write_text(json.dumps({"phone_number": phone_number}))
+            except Exception:
+                pass
 
-    # =========================================================
-    # CLOSE SLOT
-    # =========================================================
+    def load_saved_phone(self, slot_id: str) -> str | None:
+        try:
+            session_dir = self.sessions.session_path(slot_id)
+            meta_file = session_dir / "meta.json"
+            if meta_file.exists():
+                data = json.loads(meta_file.read_text())
+                return data.get("phone_number")
+        except Exception:
+            pass
+        return None
 
-    async def close_slot(
-        self,
-        slot_id: str,
-    ):
-
+    async def close_slot(self, slot_id: str):
         context = self.contexts.pop(slot_id, None)
         if context is None:
             return
+        try:
+            await context.close()
+        except Exception:
+            pass
 
-        await context.close()
-
-    # =========================================================
-    # LOGOUT + CLEAR SESSION
-    # =========================================================
-
-    async def logout_slot(
-        self,
-        slot_id: str,
-    ):
-
+    async def logout_slot(self, slot_id: str):
         await self.close_slot(slot_id)
         self.sessions.delete_session(slot_id)
 
-    # =========================================================
-    # CLOSE EVERYTHING
-    # =========================================================
-
     async def close(self):
-
         for slot_id in list(self.contexts.keys()):
             await self.close_slot(slot_id)
 
         if self.browser is not None:
-            await self.browser.close()
+            try:
+                await self.browser.close()
+            except Exception:
+                pass
             self.browser = None
 
         if self.playwright is not None:
-            await self.playwright.stop()
+            try:
+                await self.playwright.stop()
+            except Exception:
+                pass
             self.playwright = None
