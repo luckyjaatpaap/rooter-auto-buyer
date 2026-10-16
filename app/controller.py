@@ -105,23 +105,23 @@ class AccountController:
         auto_started = self._ensure_snipers_running()
         extra_msg = f"\n🚀 Auto-resumed {auto_started} saved sessions!" if auto_started > 0 else ""
         await update.message.reply_text(
-            "🤖 Rooter Auto Buyer (Immortal Pro Mode)\n\n"
+            "🤖 Rooter Auto Buyer (Swarm Pro Mode)\n\n"
             f"Total slots: {settings.total_slots}\n"
             f"Current Service ID: {settings.current_service_id}\n"
             f"Accounts/service: {settings.accounts_per_service}\n"
             f"{extra_msg}\n"
-            "System Online & Self-Healing Active. Use /status to monitor."
+            "System Online & Swarm-Ready. Use /status to monitor."
         )
 
     async def handle_help(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text(
-            "📖 PRO COMMANDS LIST\n\n"
+            "📖 SWARM PRO COMMANDS LIST\n\n"
             "/status - Live status, balance & last check time\n"
             "/login S1-A1 9876543210 - Login account\n"
             "/otp S1-A1 123456 - Submit OTP\n"
             "/screen S1-A1 - Live page screenshot\n"
             "/refresh S1-A1 - Hard refresh & start sniper\n"
-            "/trigger_buy - Bypass 30s wait & check stock NOW\n"
+            "/trigger_buy - Wake up ALL accounts & check stock NOW\n"
             "/sniper all - Start sniper on all logged-in slots\n"
             "/stop_sniper all - Pause sniper without logging out\n"
             "/heal - Clean RAM & restart browser tabs safely\n"
@@ -130,7 +130,7 @@ class AccountController:
 
     async def handle_status(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         self._ensure_snipers_running()
-        lines = ["📊 LIVE ACCOUNT STATUS", ""]
+        lines = ["📊 SWARM ACCOUNT STATUS", ""]
 
         for account in self.all_accounts():
             phone = account.phone_number if account.phone_number else "Saved Session"
@@ -172,7 +172,6 @@ class AccountController:
     # =========================================================
 
     async def _update_live_balance(self, page, account: AccountState) -> str:
-        """Page se live wallet balance padh kar status mein update karta hai."""
         wallet_balance_text = "Balance info not found"
         try:
             balance_locator = page.locator("text=/Wallet Balance/i >> visible=true").first
@@ -332,7 +331,7 @@ class AccountController:
 
             account = self.get_account(slot_id)
             if account.logged_in:
-                return await update.message.reply_text(f"⚠️ {slot_id} pehle se logged in hai. Naya login karne ke liye pehle /logout {slot_id} karein.")
+                return await update.message.reply_text(f"⚠️ {slot_id} pehle se logged in hai. Logout ke liye /logout {slot_id} karein.")
             if not phone_number.isdigit() or len(phone_number) != 10:
                 return await update.message.reply_text("❌ Valid 10-digit mobile number daal bhai.")
 
@@ -520,26 +519,25 @@ class AccountController:
             await update.message.reply_text(f"❌ Logout failed: {exc}")
 
     # =========================================================
-    # 🎯 IMMORTAL 30s SNIPER BACKGROUND WORKER (SELF-HEALING)
+    # 🎯 SWARM ATTACK SNIPER BACKGROUND WORKER (SELF-HEALING)
     # =========================================================
     async def _sniper_worker(self, slot_id: str):
         account = self.get_account(slot_id)
 
-        # Smart Stagger: Har slot ko 4-4 second ke gap par start karega taaki ek sath CPU/RAM spike na ho
+        # Smart Stagger: Har slot ko 4-4 second ke gap par start karega taaki ek sath CPU spike na ho
         try:
             slot_num = int(slot_id.split("-A")[-1])
             await asyncio.sleep((slot_num - 1) * 4)
         except Exception:
             pass
 
-        await self.telegram.send_message(f"🎯 Immortal Sniper ACTIVATED for {slot_id}. 30s Auto-Refresh running...")
+        await self.telegram.send_message(f"🎯 Swarm Sniper ACTIVATED for {slot_id}. 30s Auto-Refresh running...")
 
         cycle_count = 0
 
         while account.logged_in:
             try:
                 cycle_count += 1
-                # Har 50 cycles (~25 mins) mein tab recycle karega taaki memory humesha fresh rahe
                 if cycle_count % 50 == 0:
                     try:
                         await self.browser.save_session(slot_id, account.phone_number)
@@ -547,21 +545,19 @@ class AccountController:
                     except Exception:
                         pass
 
-                # 1. 30-SECOND WAIT PHASE WITH TIMESTAMP
+                # 1. 30-SECOND WAIT PHASE (OR SWARM TRIGGERED)
                 last_time = datetime.now().strftime("%I:%M:%S %p")
                 account.update(current_page=f"⏳ [STAGE: 30s Wait] (Last: {last_time})", last_error=None)
 
                 try:
                     await asyncio.wait_for(self.stock_event.wait(), timeout=30.0)
-                    self.stock_event.clear()
-                    account.update(current_page="⚡ [STAGE: Manual Trigger Received]")
+                    account.update(current_page="⚡ [STAGE: Swarm Triggered! Attacking!]")
                 except asyncio.TimeoutError:
                     pass
 
                 if not account.logged_in:
                     break
 
-                # Humesha healthy page fetch karega (Agar band hua toh naya kholega)
                 page = await self.browser.get_page(slot_id)
 
                 # 2. ANTI-CACHE HARD REFRESH
@@ -599,13 +595,11 @@ class AccountController:
                             await fallback_loc.last.click(force=True, timeout=3000)
                             await fallback_loc.last.evaluate("(el) => { if(el.parentElement) el.parentElement.click(); }")
                         except Exception as click_err:
-                            account.update(last_error=f"Fallback Click Note: {str(click_err)[:40]}")
+                            account.update(last_error=f"Fallback Note: {str(click_err)[:40]}")
                     else:
-                        account.update(last_error="Rs.5000 option not visible right now")
+                        account.update(last_error="Rs.5000 option not visible")
 
                 await asyncio.sleep(1.5)
-
-                # Live Wallet Balance Update (Agar page par dikh raha ho)
                 await self._update_live_balance(page, account)
 
                 # 4. STOCK CHECK RADAR
@@ -624,10 +618,17 @@ class AccountController:
                     continue
 
                 # ==========================================
-                # 🚨 STOCK DETECTED - EXECUTE BUY FLOW
+                # 🚨 STOCK DETECTED - TRIGGER SWARM & BUY
                 # ==========================================
-                account.update(current_page="🚨 [STAGE: INITIATING BUY FLOW!]")
-                await self.telegram.send_message(f"🚨 STOCK DETECTED in {slot_id}! Starting auto-buy...")
+                account.update(current_page="🚨 [STAGE: INITIATING SWARM BUY FLOW!]")
+                
+                # 🔥 Yahan baki saare accounts ki neend todne ke liye trigger bhej diya
+                if not self.stock_event.is_set():
+                    self.stock_event.set()
+                    # 3 second baad event clear ho jayega taaki loop normal chale
+                    asyncio.create_task(self._clear_stock_event_delayed())
+
+                await self.telegram.send_message(f"🚨 STOCK DETECTED in {slot_id}! Swarm attack initiated across all accounts...")
 
                 for target_qty in [2, 1]:
                     try:
@@ -665,7 +666,7 @@ class AccountController:
                             await page.screenshot(path=str(screenshot_path), full_page=False)
                             await self.telegram.send_photo(
                                 photo_path=str(screenshot_path),
-                                caption=(f"🛒 ATTEMPTING BUY (Qty {target_qty})!\n\nSlot: {slot_id}\nBalance Info: {wallet_balance_text}")
+                                caption=(f"🛒 SWARM BUY ATTEMPT (Qty {target_qty})!\n\nSlot: {slot_id}\nBalance Info: {wallet_balance_text}")
                             )
                             if screenshot_path.exists():
                                 screenshot_path.unlink()
@@ -695,7 +696,7 @@ class AccountController:
                         current_time = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
                         account.update(current_page="✅ [STAGE: SUCCESS - Code Bought!]")
                         await self.telegram.send_message(
-                            f"✅✅ SUCCESS: CODE PURCHASED!\n"
+                            f"✅✅ SWARM SUCCESS: CODE PURCHASED!\n"
                             f"Amount: Rs.5000\nQty: {target_qty}\nSlot: {slot_id}\nTime: {current_time}"
                         )
                         break
@@ -728,7 +729,6 @@ class AccountController:
                     current_page="🛠️ [STAGE: Auto-Healing Tab...]",
                     last_error=f"Self-Healed: {err_msg[:45]}"
                 )
-                # Agar browser ya tab close hua, toh bina crash kiye 3 second mein naya tab bana lega!
                 try:
                     await self.browser.reset_slot_page(slot_id)
                 except Exception:
@@ -736,6 +736,10 @@ class AccountController:
                 await asyncio.sleep(3.0)
 
         self.sniper_tasks.pop(slot_id, None)
+
+    async def _clear_stock_event_delayed(self):
+        await asyncio.sleep(3.0)
+        self.stock_event.clear()
 
     # =========================================================
     # START / STOP SNIPER & MANUAL TRIGGER
@@ -748,7 +752,7 @@ class AccountController:
 
             if target == "all":
                 started = self._ensure_snipers_running()
-                await update.message.reply_text(f"🔫 Sniper active/started! ({started} newly launched)")
+                await update.message.reply_text(f"🔫 Swarm Sniper active/started! ({started} newly launched)")
             else:
                 slot_id = target.upper()
                 acc = self.get_account(slot_id)
@@ -775,7 +779,7 @@ class AccountController:
                         task.cancel()
                         stopped += 1
                     self.sniper_tasks.pop(slot_id, None)
-                await update.message.reply_text(f"⏸️ Paused sniper on {stopped} accounts (Sessions kept logged in).")
+                await update.message.reply_text(f"⏸️ Paused sniper on {stopped} accounts.")
             else:
                 slot_id = target.upper()
                 task = self.sniper_tasks.pop(slot_id, None)
@@ -793,5 +797,5 @@ class AccountController:
         self.stock_event.clear()
 
     async def handle_trigger_buy(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
-        await update.message.reply_text("🚨 MANUAL TRIGGER SENT! All snipers checking stock right now!")
+        await update.message.reply_text("🚨 SWARM TRIGGER SENT! Waking up ALL accounts to attack stock NOW!")
         await self.trigger_stock_buy()
