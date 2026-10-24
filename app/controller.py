@@ -203,11 +203,8 @@ class AccountController:
                 pass
         return None
 
+    
     async def _open_login_popup(self, page):
-        try:
-            await self.browser.handle_location_popup(page)
-        except Exception:
-            pass
         await asyncio.sleep(1.0)
 
         mobile_input = await self._find_mobile_input(page)
@@ -215,38 +212,20 @@ class AccountController:
             return mobile_input
 
         try:
-            await page.evaluate('''() => {
-                const header = document.querySelector('header');
-                if(header) {
-                    const elements = Array.from(header.querySelectorAll('svg, button, img, .mantine-Avatar-root'));
-                    if(elements.length > 0) {
-                        const profileIcon = elements[elements.length - 1];
-                        profileIcon.dispatchEvent(new MouseEvent('mousedown', { bubbles: true }));
-                        profileIcon.dispatchEvent(new MouseEvent('mouseup', { bubbles: true }));
-                        profileIcon.click();
-                    }
-                }
-            }''')
+            # Direct hard click on Rooter profile icon
+            # Coordinates based on the supplied 1536x864 screenshot
+            await page.mouse.click(1452, 38)
             await asyncio.sleep(2.0)
+
             mobile_input = await self._find_mobile_input(page)
-            if mobile_input:
+            if mobile_input is not None:
                 return mobile_input
+
         except Exception:
             pass
 
-        candidates = [page.get_by_text("Login / Sign Up", exact=True), page.get_by_text("Login", exact=True)]
-        for candidate in candidates:
-            try:
-                if await candidate.count() > 0 and await candidate.first.is_visible(timeout=300):
-                    await candidate.first.click(force=True, timeout=2000)
-                    await asyncio.sleep(1.5)
-                    mobile_input = await self._find_mobile_input(page)
-                    if mobile_input:
-                        return mobile_input
-            except Exception:
-                pass
-
         return None
+
 
     async def _find_send_otp_button(self, page):
         candidates = [
