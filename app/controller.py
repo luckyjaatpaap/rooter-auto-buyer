@@ -202,8 +202,8 @@ class AccountController:
             except Exception:
                 pass
         return None
-   
-        async def _open_login_popup(self, page):
+
+    async def _open_login_popup(self, page):
         await asyncio.sleep(1.5)
 
         # Step 1: Check whether the login input is already visible
