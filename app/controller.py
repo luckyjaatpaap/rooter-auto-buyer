@@ -204,97 +204,49 @@ class AccountController:
         return None
 
     async def _open_login_popup(self, page):
-        await asyncio.sleep(1.5)
+        try:
+            await self.browser.handle_location_popup(page)
+        except Exception:
+            pass
+        await asyncio.sleep(1.0)
 
-        # Step 1: Check if mobile input is already visible
         mobile_input = await self._find_mobile_input(page)
         if mobile_input is not None:
-            print("ROOTER: Mobile input already visible")
             return mobile_input
 
-        # Step 2: Locate the exact profile icon from the logs
-        profile_selector = 'img[alt="profile-avatar-icon"]'
-
         try:
-            profile_icon = page.locator(profile_selector).first
+            await page.evaluate('''() => {
+                const header = document.querySelector('header');
+                if(header) {
+                    const elements = Array.from(header.querySelectorAll('svg, button, img, .mantine-Avatar-root'));
+                    if(elements.length > 0) {
+                        const profileIcon = elements[elements.length - 1];
+                        profileIcon.dispatchEvent(new MouseEvent('mousedown', { bubbles: true }));
+                        profileIcon.dispatchEvent(new MouseEvent('mouseup', { bubbles: true }));
+                        profileIcon.click();
+                    }
+                }
+            }''')
+            await asyncio.sleep(2.0)
+            mobile_input = await self._find_mobile_input(page)
+            if mobile_input:
+                return mobile_input
+        except Exception:
+            pass
 
-            if await profile_icon.count() == 0:
-                profile_icon = page.locator(
-                    'img[src="/svg/dark/profile-avatar.svg"]'
-                ).first
-
-            if await profile_icon.count() == 0:
-                print("ROOTER ERROR: Profile icon not found")
-                return None
-
-            await profile_icon.wait_for(
-                state="visible",
-                timeout=10000
-            )
-
-            # Click the profile icon itself
-            await profile_icon.click(timeout=5000)
-            print("ROOTER: Exact profile icon clicked")
-
-            # Step 3: Wait for login popup / mobile input
-            for attempt in range(20):
-                await asyncio.sleep(0.5)
-
-                mobile_input = await self._find_mobile_input(page)
-                if mobile_input is not None:
-                    print(
-                        "ROOTER: Mobile input found after profile click"
-                    )
-                    return mobile_input
-
-                # Check whether a login dialog appeared
-                try:
-                    dialog = page.locator(
-                        '[role="dialog"], [role="alertdialog"]'
-                    ).first
-
-                    if await dialog.count() > 0:
-                        if await dialog.is_visible():
-                            print("ROOTER: Dialog detected")
-                except Exception:
-                    pass
-
-            # Step 4: Log evidence if popup did not appear
+        candidates = [page.get_by_text("Login / Sign Up", exact=True), page.get_by_text("Login", exact=True)]
+        for candidate in candidates:
             try:
-                diagnostic = await page.evaluate("""() => ({
-                    url: location.href,
-                    profileExists: !!document.querySelector(
-                        'img[alt="profile-avatar-icon"]'
-                    ),
-                    dialogs: Array.from(document.querySelectorAll(
-                        '[role="dialog"], [role="alertdialog"]'
-                    )).map(el => ({
-                        text: (el.innerText || '').slice(0, 500),
-                        html: el.outerHTML.slice(0, 700)
-                    })),
-                    inputs: Array.from(
-                        document.querySelectorAll('input')
-                    ).filter(el => {
-                        const r = el.getBoundingClientRect();
-                        return r.width > 0 && r.height > 0;
-                    }).map(el => ({
-                        type: el.type,
-                        placeholder: el.placeholder,
-                        name: el.name
-                    }))
-                })""")
+                if await candidate.count() > 0 and await candidate.first.is_visible(timeout=300):
+                    await candidate.first.click(force=True, timeout=2000)
+                    await asyncio.sleep(1.5)
+                    mobile_input = await self._find_mobile_input(page)
+                    if mobile_input:
+                        return mobile_input
+            except Exception:
+                pass
 
-                print("ROOTER PROFILE CLICK RESULT:", diagnostic)
-
-            except Exception as exc:
-                print("ROOTER RESULT DIAGNOSTIC ERROR:", repr(exc))
-
-        except Exception as exc:
-            print("ROOTER PROFILE CLICK FAILED:", repr(exc))
-
-        return await self._find_mobile_input(page)
-
-
+        return None
 
     async def _find_send_otp_button(self, page):
         candidates = [
