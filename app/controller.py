@@ -203,71 +203,110 @@ class AccountController:
                 pass
         return None
 
-
     async def _open_login_popup(self, page):
         await asyncio.sleep(2)
 
-        # Check if login form is already visible
+        # Step 1: Check whether mobile input is already visible
         mobile_input = await self._find_mobile_input(page)
         if mobile_input is not None:
             print("ROOTER DIAG: Mobile input already visible")
             return mobile_input
 
-        # Diagnostic only: inspect actual clickable controls.
-        # Do not click any unverified icon yet.
+        # Step 2: Inspect the top-right header and its icon elements
         try:
             info = await page.evaluate("""() => {
-                const visible = el => {
+                const w = window.innerWidth;
+                const h = window.innerHeight;
+
+                const elements = Array.from(
+                    document.querySelectorAll('body *')
+                );
+
+                const results = elements.map(el => {
                     const r = el.getBoundingClientRect();
                     const s = getComputedStyle(el);
-                    return r.width > 0 && r.height > 0 &&
-                        s.display !== 'none' &&
-                        s.visibility !== 'hidden';
-                };
+
+                    if (
+                        r.width <= 0 ||
+                        r.height <= 0 ||
+                        r.y < 0 ||
+                        r.y > 120 ||
+                        r.x < w * 0.60 ||
+                        r.x > w ||
+                        r.width > 250 ||
+                        r.height > 150 ||
+                        s.display === 'none' ||
+                        s.visibility === 'hidden'
+                    ) {
+                        return null;
+                    }
+
+                    const parent = el.parentElement;
+
+                    return {
+                        tag: el.tagName,
+                        text: (el.innerText || '').trim().slice(0, 60),
+                        aria: el.getAttribute('aria-label'),
+                        title: el.getAttribute('title'),
+                        href: el.getAttribute('href'),
+                        role: el.getAttribute('role'),
+                        testid: el.getAttribute('data-testid'),
+                        className: typeof el.className === 'string'
+                            ? el.className.slice(0, 180)
+                            : '',
+                        x: Math.round(r.x),
+                        y: Math.round(r.y),
+                        width: Math.round(r.width),
+                        height: Math.round(r.height),
+                        cursor: s.cursor,
+                        html: el.outerHTML.slice(0, 600),
+                        parentHTML: parent
+                            ? parent.outerHTML.slice(0, 800)
+                            : ''
+                    };
+                }).filter(Boolean);
 
                 return {
                     url: location.href,
                     title: document.title,
-                    viewport: {
-                        width: window.innerWidth,
-                        height: window.innerHeight
-                    },
-                    controls: Array.from(document.querySelectorAll(
-                        'button, a, [role="button"], [tabindex="0"]'
-                    )).filter(visible).map((el, i) => {
-                        const r = el.getBoundingClientRect();
-                        return {
-                            index: i,
-                            tag: el.tagName,
-                            text: (el.innerText || '').trim().slice(0, 80),
-                            aria: el.getAttribute('aria-label'),
-                            title: el.getAttribute('title'),
-                            href: el.getAttribute('href'),
-                            testid: el.getAttribute('data-testid'),
-                            x: Math.round(r.x),
-                            y: Math.round(r.y),
-                            width: Math.round(r.width),
-                            height: Math.round(r.height),
-                            html: el.outerHTML.slice(0, 350)
-                        };
-                    }).slice(0, 100),
-                    inputs: Array.from(document.querySelectorAll('input'))
-                        .filter(visible).map(el => ({
-                            type: el.type,
-                            placeholder: el.placeholder,
-                            name: el.name
-                        }))
+                    viewport: { width: w, height: h },
+                    topRightElements: results.slice(0, 60)
                 };
             }""")
 
-            print("ROOTER LOGIN DIAGNOSTIC START")
-            print("ROOTER LOGIN DIAGNOSTIC:", info)
-            print("ROOTER LOGIN DIAGNOSTIC END")
+            print("ROOTER TOP RIGHT HTML START")
+            print("ROOTER TOP RIGHT HTML:", info)
+            print("ROOTER TOP RIGHT HTML END")
 
         except Exception as exc:
-            print("ROOTER LOGIN DIAGNOSTIC ERROR:", repr(exc))
+            print("ROOTER TOP RIGHT HTML ERROR:", repr(exc))
 
-        # Do not guess-click; return control to the existing login handler.
+        # Step 3: Inspect visible inputs for troubleshooting
+        try:
+            inputs = await page.evaluate("""() => ({
+                url: location.href,
+                inputs: Array.from(document.querySelectorAll('input'))
+                    .filter(el => {
+                        const r = el.getBoundingClientRect();
+                        const s = getComputedStyle(el);
+                        return r.width > 0 && r.height > 0 &&
+                            s.display !== 'none' &&
+                            s.visibility !== 'hidden';
+                    })
+                    .map(el => ({
+                        type: el.type,
+                        placeholder: el.placeholder,
+                        name: el.name,
+                        autocomplete: el.autocomplete
+                    }))
+            })""")
+
+            print("ROOTER VISIBLE INPUTS:", inputs)
+
+        except Exception as exc:
+            print("ROOTER INPUT DIAGNOSTIC ERROR:", repr(exc))
+
+        # Do not click an unverified icon.
         return await self._find_mobile_input(page)
 
 
