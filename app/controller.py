@@ -204,110 +204,96 @@ class AccountController:
         return None
 
     async def _open_login_popup(self, page):
-        await asyncio.sleep(2)
+        await asyncio.sleep(1.5)
 
-        # Step 1: Check whether mobile input is already visible
+        # Step 1: Check if mobile input is already visible
         mobile_input = await self._find_mobile_input(page)
         if mobile_input is not None:
-            print("ROOTER DIAG: Mobile input already visible")
+            print("ROOTER: Mobile input already visible")
             return mobile_input
 
-        # Step 2: Inspect the top-right header and its icon elements
+        # Step 2: Locate the exact profile icon from the logs
+        profile_selector = 'img[alt="profile-avatar-icon"]'
+
         try:
-            info = await page.evaluate("""() => {
-                const w = window.innerWidth;
-                const h = window.innerHeight;
+            profile_icon = page.locator(profile_selector).first
 
-                const elements = Array.from(
-                    document.querySelectorAll('body *')
-                );
+            if await profile_icon.count() == 0:
+                profile_icon = page.locator(
+                    'img[src="/svg/dark/profile-avatar.svg"]'
+                ).first
 
-                const results = elements.map(el => {
-                    const r = el.getBoundingClientRect();
-                    const s = getComputedStyle(el);
+            if await profile_icon.count() == 0:
+                print("ROOTER ERROR: Profile icon not found")
+                return None
 
-                    if (
-                        r.width <= 0 ||
-                        r.height <= 0 ||
-                        r.y < 0 ||
-                        r.y > 120 ||
-                        r.x < w * 0.60 ||
-                        r.x > w ||
-                        r.width > 250 ||
-                        r.height > 150 ||
-                        s.display === 'none' ||
-                        s.visibility === 'hidden'
-                    ) {
-                        return null;
-                    }
+            await profile_icon.wait_for(
+                state="visible",
+                timeout=10000
+            )
 
-                    const parent = el.parentElement;
+            # Click the profile icon itself
+            await profile_icon.click(timeout=5000)
+            print("ROOTER: Exact profile icon clicked")
 
-                    return {
-                        tag: el.tagName,
-                        text: (el.innerText || '').trim().slice(0, 60),
-                        aria: el.getAttribute('aria-label'),
-                        title: el.getAttribute('title'),
-                        href: el.getAttribute('href'),
-                        role: el.getAttribute('role'),
-                        testid: el.getAttribute('data-testid'),
-                        className: typeof el.className === 'string'
-                            ? el.className.slice(0, 180)
-                            : '',
-                        x: Math.round(r.x),
-                        y: Math.round(r.y),
-                        width: Math.round(r.width),
-                        height: Math.round(r.height),
-                        cursor: s.cursor,
-                        html: el.outerHTML.slice(0, 600),
-                        parentHTML: parent
-                            ? parent.outerHTML.slice(0, 800)
-                            : ''
-                    };
-                }).filter(Boolean);
+            # Step 3: Wait for login popup / mobile input
+            for attempt in range(20):
+                await asyncio.sleep(0.5)
 
-                return {
+                mobile_input = await self._find_mobile_input(page)
+                if mobile_input is not None:
+                    print(
+                        "ROOTER: Mobile input found after profile click"
+                    )
+                    return mobile_input
+
+                # Check whether a login dialog appeared
+                try:
+                    dialog = page.locator(
+                        '[role="dialog"], [role="alertdialog"]'
+                    ).first
+
+                    if await dialog.count() > 0:
+                        if await dialog.is_visible():
+                            print("ROOTER: Dialog detected")
+                except Exception:
+                    pass
+
+            # Step 4: Log evidence if popup did not appear
+            try:
+                diagnostic = await page.evaluate("""() => ({
                     url: location.href,
-                    title: document.title,
-                    viewport: { width: w, height: h },
-                    topRightElements: results.slice(0, 60)
-                };
-            }""")
-
-            print("ROOTER TOP RIGHT HTML START")
-            print("ROOTER TOP RIGHT HTML:", info)
-            print("ROOTER TOP RIGHT HTML END")
-
-        except Exception as exc:
-            print("ROOTER TOP RIGHT HTML ERROR:", repr(exc))
-
-        # Step 3: Inspect visible inputs for troubleshooting
-        try:
-            inputs = await page.evaluate("""() => ({
-                url: location.href,
-                inputs: Array.from(document.querySelectorAll('input'))
-                    .filter(el => {
+                    profileExists: !!document.querySelector(
+                        'img[alt="profile-avatar-icon"]'
+                    ),
+                    dialogs: Array.from(document.querySelectorAll(
+                        '[role="dialog"], [role="alertdialog"]'
+                    )).map(el => ({
+                        text: (el.innerText || '').slice(0, 500),
+                        html: el.outerHTML.slice(0, 700)
+                    })),
+                    inputs: Array.from(
+                        document.querySelectorAll('input')
+                    ).filter(el => {
                         const r = el.getBoundingClientRect();
-                        const s = getComputedStyle(el);
-                        return r.width > 0 && r.height > 0 &&
-                            s.display !== 'none' &&
-                            s.visibility !== 'hidden';
-                    })
-                    .map(el => ({
+                        return r.width > 0 && r.height > 0;
+                    }).map(el => ({
                         type: el.type,
                         placeholder: el.placeholder,
-                        name: el.name,
-                        autocomplete: el.autocomplete
+                        name: el.name
                     }))
-            })""")
+                })""")
 
-            print("ROOTER VISIBLE INPUTS:", inputs)
+                print("ROOTER PROFILE CLICK RESULT:", diagnostic)
+
+            except Exception as exc:
+                print("ROOTER RESULT DIAGNOSTIC ERROR:", repr(exc))
 
         except Exception as exc:
-            print("ROOTER INPUT DIAGNOSTIC ERROR:", repr(exc))
+            print("ROOTER PROFILE CLICK FAILED:", repr(exc))
 
-        # Do not click an unverified icon.
         return await self._find_mobile_input(page)
+
 
 
     async def _find_send_otp_button(self, page):
