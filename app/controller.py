@@ -242,25 +242,32 @@ class AccountController:
     # =========================================================
 
     async def _destroy_location_popup(self, page, slot_id: str = "SLOT"):
-        for _ in range(4):
+        """
+        Location popup ko baar-baar check karke tab tak hatayega jab tak woh puri tarah gayab na ho jaye.
+        """
+        for _ in range(8):
             try:
                 stay_buttons = [
                     page.get_by_text("No, stay on this site", exact=False),
                     page.locator("button:has-text('No, stay on this site')"),
                     page.locator("text=/stay on this site/i"),
+                    page.locator("div:has-text('No, stay on this site')")
                 ]
-                clicked_stay = False
+                clicked_any = False
                 for loc in stay_buttons:
-                    if await loc.count() > 0 and await loc.first.is_visible(timeout=400):
+                    if await loc.count() > 0 and await loc.first.is_visible(timeout=800):
                         await loc.first.click(force=True, timeout=2000)
-                        log_step(slot_id, "Dismissed location popup -> clicked 'No, stay on this site'")
-                        clicked_stay = True
-                        await asyncio.sleep(0.8)
+                        log_step(slot_id, "Successfully clicked 'No, stay on this site'")
+                        clicked_any = True
+                        await asyncio.sleep(1.0)
                         break
-                if not clicked_stay:
+                
+                if not clicked_any:
+                    # Agar popup nahi dikha toh loop tod do
                     break
+                await asyncio.sleep(0.5)
             except Exception:
-                break
+                pass
 
         try:
             curr_url = (page.url or "").lower()
@@ -268,12 +275,9 @@ class AccountController:
                 log_step(slot_id, f"Page redirected to {curr_url}! Returning to PlayStation product page...")
                 await page.goto(settings.product_url, wait_until="domcontentloaded", timeout=35000)
                 await asyncio.sleep(2.0)
-                stay_loc = page.locator("text=/stay on this site/i")
-                if await stay_loc.count() > 0 and await stay_loc.first.is_visible(timeout=1000):
-                    await stay_loc.first.click(force=True)
-                    await asyncio.sleep(1.0)
         except Exception as e:
             log_step(slot_id, f"URL check note: {e}")
+
 
     async def _update_live_balance(self, page, account: AccountState) -> str:
         wallet_balance_text = "Balance info not found"
