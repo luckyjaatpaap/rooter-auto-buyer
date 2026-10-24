@@ -137,11 +137,11 @@ class BrowserManager:
             pass
         return await self.get_page(slot_id)
 
-    # =========================================================
-    # ROOTER LOCATION POPUP
-    # =========================================================
-
-    async def handle_location_popup(page: Page) -> bool:
+     # =========================================================
+     # ROOTER LOCATION POPUP
+     # =========================================================
+     
+    async def handle_location_popup(self, page: Page, slot_id: str = "SLOT") -> bool:
         try:
             await page.wait_for_timeout(600)
             
@@ -183,7 +183,6 @@ class BrowserManager:
             return False
         except Exception:
             return False
-
 
     # =========================================================
     # OPEN & ENSURE PLAYSTATION PRODUCT
