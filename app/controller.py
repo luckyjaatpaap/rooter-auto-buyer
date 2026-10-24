@@ -204,111 +204,146 @@ class AccountController:
         return None
 
     async def _open_login_popup(self, page):
-        await asyncio.sleep(1.5)
+        await asyncio.sleep(2)
 
-        # Step 1: Check whether the login input is already visible
+        # 1. Agar login form pehle se khula hai, use reuse karo
         mobile_input = await self._find_mobile_input(page)
         if mobile_input is not None:
             return mobile_input
 
-        # Step 2: Inspect common login/profile buttons
-        selectors = [
+        # 2. Profile/account/login buttons aur links dhoondo
+        profile_selectors = [
+            'header [aria-label*="profile" i]',
+            'header [aria-label*="account" i]',
+            'header [aria-label*="user" i]',
+            'header [title*="profile" i]',
+            'header [title*="account" i]',
+            'header a[href*="login" i]',
+            'header a[href*="account" i]',
+            'header a[href*="profile" i]',
             'header button',
             'header a',
             'header [role="button"]',
-            'button:has-text("Login")',
-            'button:has-text("Log in")',
-            'button:has-text("Sign in")',
-            'text=Login',
-            'text=Log in',
-            'text=Sign in',
+            'button[aria-label*="profile" i]',
+            'button[aria-label*="account" i]',
+            'button[aria-label*="login" i]',
+            'button[title*="profile" i]',
+            'button[title*="account" i]',
         ]
 
-        for selector in selectors:
-            try:
-                locator = page.locator(selector)
-                count = await locator.count()
+        clicked = False
 
-                for index in range(min(count, 20)):
-                    item = locator.nth(index)
+        for selector in profile_selectors:
+            try:
+                elements = page.locator(selector)
+                count = min(await elements.count(), 30)
+
+                for index in range(count):
+                    item = elements.nth(index)
 
                     try:
-                        if not await item.is_visible(timeout=500):
+                        if not await item.is_visible(timeout=700):
                             continue
 
-                        text = (
-                            await item.inner_text(timeout=500)
-                        ).strip().lower()
+                        details = await item.evaluate("""el => ({
+                            text: (el.innerText || '').trim().toLowerCase(),
+                            aria: (el.getAttribute('aria-label') || '').toLowerCase(),
+                            title: (el.getAttribute('title') || '').toLowerCase(),
+                            href: (el.getAttribute('href') || '').toLowerCase(),
+                            testid: (el.getAttribute('data-testid') || '').toLowerCase(),
+                            html: el.outerHTML.slice(0, 500)
+                        })""")
 
-                        # Avoid clicking unrelated navigation controls
-                        if text and not any(
-                            word in text
-                            for word in [
-                                "login",
-                                "log in",
-                                "sign in",
-                            ]
-                        ):
+                        text = details.get("text", "")
+                        aria = details.get("aria", "")
+                        title = details.get("title", "")
+                        href = details.get("href", "")
+                        testid = details.get("testid", "")
+                        html = details.get("html", "").lower()
+
+                        # Sirf login/profile/account se related element click karo
+                        keywords = (
+                            "profile", "account", "login", "log in",
+                            "sign in", "signin", "user"
+                        )
+
+                        has_keyword = any(
+                            word in value
+                            for value in (text, aria, title, href, testid, html)
+                            for word in keywords
+                        )
+
+                        # Header ke har button ko blindly click mat karo
+                        if not has_keyword:
                             continue
 
-                        await item.click(timeout=2500)
-                        await asyncio.sleep(1.5)
+                        print(
+                            "ROOTER PROFILE CANDIDATE:",
+                            selector,
+                            details
+                        )
+
+                        await item.click(timeout=3000)
+                        clicked = True
+                        print("ROOTER PROFILE CLICKED:", selector)
+                        await asyncio.sleep(2)
 
                         mobile_input = await self._find_mobile_input(page)
                         if mobile_input is not None:
+                            print("ROOTER MOBILE INPUT FOUND")
                             return mobile_input
 
-                    except Exception:
+                        # Click ke baad popup animation/load hone ka wait
+                        for _ in range(6):
+                            await asyncio.sleep(0.5)
+                            mobile_input = await self._find_mobile_input(page)
+                            if mobile_input is not None:
+                                print("ROOTER MOBILE INPUT FOUND AFTER WAIT")
+                                return mobile_input
+
+                    except Exception as exc:
+                        print("Profile candidate skipped:", str(exc)[:180])
                         continue
 
-            except Exception:
-                continue
+            except Exception as exc:
+                print("Profile selector failed:", selector, str(exc)[:150])
 
-        # Step 3: Wait for a login form that may load asynchronously
-        for _ in range(10):
-            await asyncio.sleep(0.5)
-
-            mobile_input = await self._find_mobile_input(page)
-            if mobile_input is not None:
-                return mobile_input
-
-        # Step 4: Log visible inputs for diagnosis
+        # 3. Diagnose karo; galat element click karke aage mat badho
         try:
-            result = await page.evaluate("""() => ({
+            diagnostic = await page.evaluate("""() => ({
                 url: location.href,
+                title: document.title,
+                header: Array.from(document.querySelectorAll(
+                    'header button, header a, header [role="button"]'
+                )).filter(el => {
+                    const r = el.getBoundingClientRect();
+                    return r.width > 0 && r.height > 0;
+                }).map(el => ({
+                    text: (el.innerText || '').trim().slice(0, 80),
+                    aria: el.getAttribute('aria-label'),
+                    title: el.getAttribute('title'),
+                    href: el.getAttribute('href'),
+                    html: el.outerHTML.slice(0, 350)
+                })).slice(0, 35),
                 inputs: Array.from(document.querySelectorAll('input'))
                     .filter(el => {
                         const r = el.getBoundingClientRect();
                         return r.width > 0 && r.height > 0;
-                    })
-                    .map(el => ({
+                    }).map(el => ({
                         type: el.type,
                         placeholder: el.placeholder,
-                        name: el.name,
-                        autocomplete: el.autocomplete
-                    })),
-                buttons: Array.from(
-                    document.querySelectorAll(
-                        'header button, header a, button'
-                    )
-                )
-                .filter(el => {
-                    const r = el.getBoundingClientRect();
-                    return r.width > 0 && r.height > 0;
-                })
-                .slice(0, 25)
-                .map(el => ({
-                    text: (el.innerText || '').trim().slice(0, 60),
-                    ariaLabel: el.getAttribute('aria-label')
-                }))
+                        name: el.name
+                    }))
             })""")
 
-            print("ROOTER LOGIN DIAGNOSTICS:", result)
+            print("ROOTER PROFILE DIAGNOSTICS:", diagnostic)
 
         except Exception as exc:
-            print("Login diagnostics failed:", exc)
+            print("ROOTER DIAGNOSTICS FAILED:", str(exc))
 
+        print("ROOTER LOGIN POPUP NOT FOUND. Profile click attempted:", clicked)
         return await self._find_mobile_input(page)
+
 
     async def _find_send_otp_button(self, page):
         candidates = [
