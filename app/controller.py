@@ -103,32 +103,30 @@ class AccountController:
         auto_started = self._ensure_snipers_running()
         extra_msg = f"\n🚀 Auto-resumed {auto_started} saved sessions!" if auto_started > 0 else ""
         await update.message.reply_text(
-            "🤖 Rooter Auto Buyer (Swarm Pro Mode)\n\n"
+            "🤖 Rooter Auto Buyer (Stable Pro Mode)\n\n"
             f"Total slots: {settings.total_slots}\n"
             f"Current Service ID: {settings.current_service_id}\n"
             f"Accounts/service: {settings.accounts_per_service}\n"
             f"{extra_msg}\n"
-            "System Online & Swarm-Ready. Use /status to monitor."
+            "System Online & Stable. Use /status to monitor."
         )
 
     async def handle_help(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text(
-            "📖 SWARM PRO COMMANDS LIST\n\n"
-            "/status - Live status, balance & last check time\n"
+            "📖 COMMANDS LIST\n\n"
+            "/status - Live status & balance\n"
             "/login S1-A1 9876543210 - Login account\n"
             "/otp S1-A1 123456 - Submit OTP\n"
-            "/screen S1-A1 - Live page screenshot\n"
-            "/refresh S1-A1 - Hard refresh & start sniper\n"
-            "/trigger_buy - Wake up ALL accounts & check stock NOW\n"
-            "/sniper all - Start sniper on all logged-in slots\n"
-            "/stop_sniper all - Pause sniper without logging out\n"
-            "/heal - Clean RAM & restart browser tabs safely\n"
-            "/logout S1-A1 - Logout & delete saved session"
+            "/screen S1-A1 - Live screenshot\n"
+            "/refresh S1-A1 - Hard refresh\n"
+            "/trigger_buy - Check stock now\n"
+            "/heal - Clean RAM & fresh tabs\n"
+            "/logout S1-A1 - Logout & clear session"
         )
 
     async def handle_status(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         self._ensure_snipers_running()
-        lines = ["📊 SWARM ACCOUNT STATUS", ""]
+        lines = ["📊 LIVE ACCOUNT STATUS", ""]
 
         for account in self.all_accounts():
             phone = account.phone_number if account.phone_number else "Saved Session"
@@ -151,7 +149,7 @@ class AccountController:
         await update.message.reply_text("\n".join(lines))
 
     async def handle_heal(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
-        await update.message.reply_text("🧹 Healing browser & cleaning RAM for all active slots...")
+        await update.message.reply_text("🧹 Cleaning RAM and refreshing tabs...")
         healed = 0
         for slot_id, acc in self.accounts.items():
             if acc.logged_in:
@@ -163,10 +161,10 @@ class AccountController:
                 except Exception:
                     pass
         self._ensure_snipers_running()
-        await update.message.reply_text(f"✅ RAM cleaned & {healed} slots refreshed! All snipers running.")
+        await update.message.reply_text(f"✅ RAM cleaned & {healed} slots refreshed!")
 
     # =========================================================
-    # BULLETPROOF LOGIN & OTP HELPERS (NO FALSE CLICKS)
+    # LOGIN & OTP HELPERS
     # =========================================================
 
     async def _update_live_balance(self, page, account: AccountState) -> str:
@@ -183,210 +181,129 @@ class AccountController:
         return wallet_balance_text
 
     async def _find_mobile_input(self, page):
-        """
-        STRICT FINDER: Top search bar (Y < 90) ko bilkul ignore karega!
-        Sirf popup/modal ke andar wale mobile input (Y >= 90) ko hi return karega.
-        """
-        try:
-            inputs = page.locator("input:visible")
-            count = await inputs.count()
-            for i in range(count):
-                item = inputs.nth(i)
-                try:
-                    box = await item.bounding_box()
-                    if not box:
-                        continue
-                    # Top header search bar humesha Y < 90 par hota hai -> Ignore it!
-                    if box["y"] < 90:
-                        continue
-
-                    ph = (await item.get_attribute("placeholder") or "").lower()
-                    in_type = (await item.get_attribute("type") or "").lower()
-                    in_mode = (await item.get_attribute("inputmode") or "").lower()
-
-                    if "search" in ph or "bgmi" in ph or "valorant" in ph or "coupon" in ph:
-                        continue
-
-                    if (
-                        in_type in ["tel", "number"]
-                        or in_mode in ["tel", "numeric"]
-                        or "mobile" in ph
-                        or "phone" in ph
-                        or "number" in ph
-                        or box["y"] > 120
-                    ):
+        selectors = [
+            'input[type="tel"]',
+            'input[inputmode="tel"]',
+            'input[name="phone"]',
+            'input[placeholder*="mobile" i]',
+            'input[placeholder*="number" i]',
+            'input[placeholder*="phone" i]'
+        ]
+        for selector in selectors:
+            try:
+                locator = page.locator(selector)
+                count = await locator.count()
+                for index in range(count):
+                    item = locator.nth(index)
+                    if await item.is_visible(timeout=300):
+                        ph = (await item.get_attribute("placeholder") or "").lower()
+                        if "search" in ph or "bgmi" in ph or "valorant" in ph or "coupon" in ph:
+                            continue
                         return item
-                except Exception:
-                    continue
-        except Exception:
-            pass
+            except Exception:
+                pass
         return None
 
-    async def _click_top_right_profile_icon(self, page):
-        """
-        Top-right profile icon par click karega aur agar wo link hai toh 
-        page ko redirect hone se roke ga taaki home page par na jaye.
-        """
-        try:
-            clicked = await page.evaluate('''() => {
-                const all = Array.from(document.querySelectorAll('svg, button, a, img, [role="button"], div'));
-                const candidates = [];
-                for (const el of all) {
-                    const r = el.getBoundingClientRect();
-                    if (r.top >= 5 && r.top <= 80 && r.left >= 980 && r.width >= 15 && r.width <= 70 && r.height >= 15 && r.height <= 70) {
-                        candidates.push({ el: el, right: r.right });
-                    }
-                }
-                if (candidates.length === 0) return false;
-                
-                candidates.sort((a, b) => b.right - a.right);
-                const target = candidates[0].el;
-
-                // Agar ye link hai toh default jump/navigation roko
-                const anchor = target.closest('a');
-                if (anchor) {
-                    anchor.setAttribute('href', 'javascript:void(0)');
-                    anchor.onclick = (e) => e.preventDefault();
-                }
-
-                // Click events fire karo
-                target.dispatchEvent(new MouseEvent('mousedown', { bubbles: true }));
-                target.dispatchEvent(new MouseEvent('mouseup', { bubbles: true }));
-                target.click();
-                return true;
-            }''')
-
-            await asyncio.sleep(1.5)
-            if await self._find_mobile_input(page) is not None:
-                return True
-        except Exception:
-            pass
-
-        # Fallback: Agar JS se na ho toh exact coordinates par click (No redirect risk)
-        try:
-            await page.mouse.click(1134, 42)
-            await asyncio.sleep(1.5)
-            if await self._find_mobile_input(page) is not None:
-                return True
-        except Exception:
-            pass
-
-        return False
-
-
     async def _open_login_popup(self, page):
-        # Step 1: Sabse pehle Location Popup ("No, stay on this site") ko 100% hatao
         try:
             await self.browser.handle_location_popup(page)
         except Exception:
             pass
-        await asyncio.sleep(0.8)
+        await asyncio.sleep(1.0)
 
-        # Check agar pehle se login modal khula hai
         mobile_input = await self._find_mobile_input(page)
         if mobile_input is not None:
             return mobile_input
 
-        # Step 2: Try clicking top-right profile icon (2 attempts)
-        for _ in range(2):
-            opened = await self._click_top_right_profile_icon(page)
-            if opened:
-                mobile_input = await self._find_mobile_input(page)
-                if mobile_input is not None:
-                    return mobile_input
+        # Simple coordinate click on profile icon (Top Right)
+        try:
+            await page.mouse.click(1134, 35)
+            await asyncio.sleep(1.5)
+            mobile_input = await self._find_mobile_input(page)
+            if mobile_input is not None:
+                return mobile_input
+        except Exception:
+            pass
 
-            # Agar click karne se koi dropdown menu khula ho jisme "Login" likha ho
-            for text_opt in ["Login / Sign Up", "Login", "Sign In", "Sign Up"]:
-                try:
-                    loc = page.get_by_text(text_opt, exact=False).first
-                    if await loc.count() > 0 and await loc.is_visible(timeout=500):
-                        await loc.click(force=True)
-                        await asyncio.sleep(1.5)
-                        mobile_input = await self._find_mobile_input(page)
-                        if mobile_input is not None:
-                            return mobile_input
-                except Exception:
-                    pass
+        # Text click fallback
+        candidates = [
+            page.get_by_text("Login / Sign Up", exact=True),
+            page.get_by_text("Login", exact=True),
+            page.locator("button:has-text('Login')")
+        ]
+        for candidate in candidates:
+            try:
+                if await candidate.count() > 0 and await candidate.first.is_visible(timeout=500):
+                    await candidate.first.click(force=True)
+                    await asyncio.sleep(1.5)
+                    inp = await self._find_mobile_input(page)
+                    if inp:
+                        return inp
+            except Exception:
+                pass
 
         return None
 
     async def _find_send_otp_button(self, page):
-        """
-        STRICT BUTTON FINDER:
-        Location popup wale 'Yes, continue' button ko KABHI touch nahi karega!
-        Sirf Login Modal ke andar wale Continue / Send OTP button ko pakdega.
-        """
-        try:
-            buttons = page.locator("button:visible")
-            count = await buttons.count()
-            for i in range(count):
-                btn = buttons.nth(i)
-                try:
+        candidates = [
+            page.locator("button:has-text('Continue')"),
+            page.locator("button:has-text('CONTINUE')"),
+            page.locator("button:has-text('Send OTP')"),
+            page.locator("button:has-text('Get OTP')")
+        ]
+        for locator in candidates:
+            try:
+                count = await locator.count()
+                for i in range(count):
+                    btn = locator.nth(i)
                     txt = (await btn.inner_text(timeout=500) or "").strip().lower()
-                    if "yes, continue" in txt or "stay on this site" in txt or "buy now" in txt:
+                    if "yes, continue" in txt or "stay on this site" in txt:
                         continue
-                    if any(k in txt for k in ["continue", "send otp", "get otp", "proceed", "next"]):
-                        box = await btn.bounding_box()
-                        if box and box["y"] > 150:
-                            return btn
-                except Exception:
-                    continue
-        except Exception:
-            pass
+                    if await btn.is_visible(timeout=300):
+                        return btn
+            except Exception:
+                pass
         return None
 
-    async def _find_otp_inputs(self, page, phone_number: str = ""):
-        """
-        STRICT OTP CHECK:
-        1. Top search bar (Y < 90) ko ignore karega.
-        2. Agar input box mein abhi bhi 10-digit mobile number pada hai, toh wo OTP box NAHI hai.
-        """
-        try:
-            inputs = page.locator("input:visible")
-            count = await inputs.count()
-            modal_inputs = []
-
-            for i in range(count):
-                el = inputs.nth(i)
-                box = await el.bounding_box()
-                if not box or box["y"] < 90:
-                    continue
-                ph = (await el.get_attribute("placeholder") or "").lower()
-                if "search" in ph or "bgmi" in ph or "coupon" in ph:
-                    continue
-                val = (await el.input_value() or "").strip()
-                if phone_number and phone_number in val:
-                    continue
-                modal_inputs.append(el)
-
-            # Case A: 4 ya 6 alag-alag OTP digit boxes hain
-            if len(modal_inputs) >= 4:
-                return modal_inputs[:8]
-
-            # Case B: Single OTP box hai (Verify button ya OTP text ke sath)
-            if len(modal_inputs) == 1:
-                verify_btn = await self._find_verify_button(page)
-                otp_heading = await page.locator("text=/verify|enter otp|one time|sent to/i >> visible=true").count()
-                if verify_btn is not None or otp_heading > 0:
-                    return modal_inputs
-        except Exception:
-            pass
-
-        return []
+    async def _find_otp_inputs(self, page):
+        selectors = [
+            'input[autocomplete="one-time-code"]',
+            'input[placeholder*="OTP" i]',
+            'input[inputmode="numeric"]',
+            'input[type="tel"]',
+            'input[type="number"]',
+            'input[type="text"]'
+        ]
+        found = []
+        for selector in selectors:
+            try:
+                locator = page.locator(selector)
+                count = await locator.count()
+                for index in range(count):
+                    item = locator.nth(index)
+                    if await item.is_visible(timeout=300):
+                        ph = (await item.get_attribute("placeholder") or "").lower()
+                        if "search" in ph or "bgmi" in ph or "mobile" in ph or "phone" in ph:
+                            continue
+                        found.append(item)
+                if found:
+                    return found
+            except Exception:
+                continue
+        return found
 
     async def _find_verify_button(self, page):
-        try:
-            buttons = page.locator("button:visible")
-            count = await buttons.count()
-            for i in range(count):
-                btn = buttons.nth(i)
-                txt = (await btn.inner_text(timeout=500) or "").strip().lower()
-                if any(k in txt for k in ["verify", "submit", "confirm otp", "login"]):
-                    box = await btn.bounding_box()
-                    if box and box["y"] > 150:
-                        return btn
-        except Exception:
-            pass
+        candidates = [
+            page.locator("button:has-text('Verify')"),
+            page.locator("button:has-text('VERIFY')"),
+            page.locator("button:has-text('Submit')")
+        ]
+        for locator in candidates:
+            try:
+                if await locator.count() > 0 and await locator.first.is_visible(timeout=300):
+                    return locator.first
+            except Exception:
+                pass
         return None
 
     # =========================================================
@@ -415,81 +332,49 @@ class AccountController:
             page = await self.browser.open_product_page(slot_id)
             await asyncio.sleep(1.5)
 
-            await self.browser.handle_location_popup(page)
-            await asyncio.sleep(0.8)
-
-            account.update(phone_number=phone_number, active=True, current_page="🔐 Opening Login Popup", last_error=None)
+            account.update(phone_number=phone_number, active=True, current_page="🔐 Handling Login", last_error=None)
 
             mobile_input = await self._open_login_popup(page)
             if mobile_input is None:
                 screenshot_path = self.screenshots_dir / f"{slot_id}_login_error.png"
                 await page.screenshot(path=str(screenshot_path), full_page=False)
-                await self.telegram.send_photo(
-                    photo_path=str(screenshot_path),
-                    caption="❌ Profile icon click karne par bhi Login Popup nahi khula."
-                )
+                await self.telegram.send_photo(photo_path=str(screenshot_path), caption="❌ Login popup nahi khula.")
                 if screenshot_path.exists():
                     screenshot_path.unlink()
-                raise RuntimeError("Login popup did not open.")
+                raise RuntimeError("Login popup not opened.")
 
             await mobile_input.click(force=True)
             await asyncio.sleep(0.3)
             await mobile_input.fill("")
-            await page.keyboard.type(phone_number, delay=65)
-            await asyncio.sleep(0.6)
-
-            val_now = (await mobile_input.input_value() or "").strip()
-            if phone_number not in val_now:
-                await mobile_input.fill(phone_number)
-                await asyncio.sleep(0.5)
+            await page.keyboard.type(phone_number, delay=50)
+            await asyncio.sleep(1.0)
 
             send_otp_button = await self._find_send_otp_button(page)
             if send_otp_button is None:
                 error_ss = self.screenshots_dir / f"{slot_id}_continue_btn_err.png"
                 await page.screenshot(path=str(error_ss), full_page=False)
-                await self.telegram.send_photo(photo_path=str(error_ss), caption="❌ Login popup mein Continue button nahi mila.")
+                await self.telegram.send_photo(photo_path=str(error_ss), caption="❌ Continue button nahi mila.")
                 if error_ss.exists():
                     error_ss.unlink()
-                raise RuntimeError("Continue button inside login modal not found.")
+                raise RuntimeError("Continue button not found.")
 
-            try:
-                await send_otp_button.evaluate(
-                    "(el) => { el.removeAttribute('disabled'); el.removeAttribute('data-disabled'); el.disabled = false; }"
-                )
-            except Exception:
-                pass
-
+            await send_otp_button.evaluate("(el) => { el.removeAttribute('disabled'); el.removeAttribute('data-disabled'); el.disabled = false; }")
             await send_otp_button.click(force=True, timeout=3000)
 
-            otp_appeared = False
-            for _ in range(30):
+            for _ in range(40):
                 await asyncio.sleep(0.5)
-                if await self._find_otp_inputs(page, phone_number=phone_number):
-                    otp_appeared = True
+                if await self._find_otp_inputs(page):
                     break
-
-            if not otp_appeared:
+            else:
                 error_ss = self.screenshots_dir / f"{slot_id}_otp_popup_err.png"
                 await page.screenshot(path=str(error_ss), full_page=False)
-                await self.telegram.send_photo(photo_path=str(error_ss), caption="❌ Continue dabaya par OTP box nahi aaya (Dekh photo).")
+                await self.telegram.send_photo(photo_path=str(error_ss), caption="❌ OTP box nahi aaya.")
                 if error_ss.exists():
                     error_ss.unlink()
-                raise RuntimeError("OTP screen did not appear after clicking Continue.")
-
-            otp_ss = self.screenshots_dir / f"{slot_id}_otp_ready.png"
-            try:
-                await page.screenshot(path=str(otp_ss), full_page=False)
-                await self.telegram.send_photo(
-                    photo_path=str(otp_ss),
-                    caption=f"📩 OTP Sent for {slot_id}!\nAb turant bhej: `/otp {slot_id} 123456`"
-                )
-                if otp_ss.exists():
-                    otp_ss.unlink()
-            except Exception:
-                await update.message.reply_text(f"📩 OTP sent for {slot_id}.\nAb bhej: `/otp {slot_id} 123456`")
+                raise RuntimeError("OTP popup did not appear.")
 
             account.update(current_page="📩 OTP Sent. Waiting...", last_error=None)
-
+            await update.message.reply_text(f"📩 OTP sent for {slot_id}.\nAb bhej: `/otp {slot_id} 123456`")
         except Exception as exc:
             try:
                 account.update(last_error=str(exc), active=False)
@@ -506,47 +391,36 @@ class AccountController:
 
             account = self.get_account(slot_id)
             if len(otp) not in [4, 6, 8] or not otp.isdigit():
-                return await update.message.reply_text("❌ Valid numeric OTP daal bhai.")
+                return await update.message.reply_text("❌ OTP 4, 6 ya 8 digit ka number hona chahiye.")
 
             page = await self.browser.get_page(slot_id)
 
             otp_inputs = []
             for _ in range(20):
-                otp_inputs = await self._find_otp_inputs(page, phone_number=account.phone_number or "")
+                otp_inputs = await self._find_otp_inputs(page)
                 if otp_inputs:
                     break
                 await asyncio.sleep(0.5)
 
             if not otp_inputs:
-                error_ss = self.screenshots_dir / f"{slot_id}_otp_missing.png"
-                await page.screenshot(path=str(error_ss), full_page=False)
-                await self.telegram.send_photo(photo_path=str(error_ss), caption="❌ OTP boxes page par nahi mile.")
-                if error_ss.exists():
-                    error_ss.unlink()
                 raise RuntimeError("OTP fields page par nahi mile.")
 
             if len(otp_inputs) == 1:
-                await otp_inputs[0].click(force=True)
-                await otp_inputs[0].fill("")
-                await page.keyboard.type(otp, delay=60)
+                await otp_inputs[0].focus()
+                await page.keyboard.type(otp, delay=50)
             else:
-                await otp_inputs[0].click(force=True)
+                boxes = otp_inputs[:len(otp)]
                 for i, digit in enumerate(otp):
-                    if i < len(otp_inputs):
-                        await otp_inputs[i].click(force=True)
+                    if i < len(boxes):
+                        await boxes[i].focus()
                         await page.keyboard.press(digit)
-                        await asyncio.sleep(0.06)
+                        await asyncio.sleep(0.05)
 
             await asyncio.sleep(1.0)
 
             verify_button = await self._find_verify_button(page)
             if verify_button is not None:
-                try:
-                    await verify_button.evaluate(
-                        "(el) => { el.removeAttribute('disabled'); el.removeAttribute('data-disabled'); el.disabled = false; }"
-                    )
-                except Exception:
-                    pass
+                await verify_button.evaluate("(el) => { el.removeAttribute('disabled'); el.removeAttribute('data-disabled'); el.disabled = false; }")
                 await verify_button.click(force=True, timeout=3000)
 
             await asyncio.sleep(3.5)
@@ -576,9 +450,6 @@ class AccountController:
             account = self.get_account(slot_id)
 
             page = await self.browser.get_page(slot_id)
-            if not page.url or page.url == "about:blank":
-                page = await self.browser.open_product_page(slot_id)
-
             screenshot_path = self.screenshots_dir / f"{slot_id}.png"
             await page.screenshot(path=str(screenshot_path), full_page=False)
             await self.telegram.send_photo(photo_path=str(screenshot_path), caption=f"🖥 {slot_id}\nState: {account.current_page}")
@@ -648,13 +519,13 @@ class AccountController:
                 last_error=None,
                 wallet_balance=None
             )
-
-            await update.message.reply_text(f"🚪 Successfully logged out & RAM freed for {slot_id}. Slot is now fresh for a new account!")
+            
+            await update.message.reply_text(f"🚪 Successfully logged out & RAM freed for {slot_id}!")
         except Exception as exc:
             await update.message.reply_text(f"❌ Logout failed: {exc}")
 
     # =========================================================
-    # 🎯 SWARM ATTACK SNIPER BACKGROUND WORKER (SELF-HEALING)
+    # 🎯 SWARM ATTACK SNIPER WORKER
     # =========================================================
     async def _sniper_worker(self, slot_id: str):
         account = self.get_account(slot_id)
@@ -751,7 +622,7 @@ class AccountController:
                 # 🚨 STOCK DETECTED - TRIGGER SWARM & BUY
                 # ==========================================
                 account.update(current_page="🚨 [STAGE: INITIATING SWARM BUY FLOW!]")
-
+                
                 if not self.stock_event.is_set():
                     self.stock_event.set()
                     asyncio.create_task(self._clear_stock_event_delayed())
