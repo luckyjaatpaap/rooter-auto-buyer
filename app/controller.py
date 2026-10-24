@@ -136,7 +136,7 @@ class AccountController:
             "/login S1-A1 9876543210 - Login account\n"
             "/otp S1-A1 123456 - Submit OTP\n"
             "/cookie S1-A1 <token> - Quick Short Token Import\n"
-            "/popup S1-A1 - Force coordinate click & dismiss location popup\n"
+            "/popup S1-A1 - Vaporize location popup from DOM\n"
             "/screen S1-A1 - Live page screenshot\n"
             "/refresh S1-A1 - Hard refresh & start sniper\n"
             "/trigger_buy - Wake up ALL accounts & check stock NOW\n"
@@ -186,7 +186,7 @@ class AccountController:
         await update.message.reply_text(f"✅ RAM cleaned & {healed} slots refreshed! All snipers running.")
 
     # =========================================================
-    # SHORT TOKEN & FORCE POPUP HANDLERS
+    # SHORT TOKEN & DOM VAPORIZER POPUP HANDLERS
     # =========================================================
 
     async def handle_cookie_import(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -249,46 +249,55 @@ class AccountController:
             if not page.url or page.url == "about:blank":
                 return await update.message.reply_text(f"❌ {slot_id} ka browser page active nahi hai.")
 
-            # 1. JS Click attempt
-            await page.evaluate('''() => {
-                const elements = document.querySelectorAll('button, div, span, a');
+            # Nuclear Option: Vaporize popup from DOM instantly
+            removed = await page.evaluate('''() => {
+                let found = false;
+                const elements = document.querySelectorAll('div, section');
                 for (const el of elements) {
-                    const txt = el.innerText || el.textContent || "";
-                    if (txt.includes('No, stay on this site')) {
-                        el.click();
-                        break;
+                    if (el.innerText && el.innerText.includes('Different Location Detected')) {
+                        const modal = el.closest('div[role="dialog"]') || el.closest('.fixed') || el.closest('.absolute') || el;
+                        if (modal) {
+                            modal.remove();
+                            found = true;
+                        }
                     }
                 }
+                return found;
             ''')
 
-            # 2. Exact Screenshot Coordinates for "No, stay on this site" (X: 499, Y: 625)
-            await page.mouse.click(499, 625)
-            await asyncio.sleep(0.3)
-            await page.mouse.click(499, 635)
-
-            await update.message.reply_text(f"🎯 Exact coordinate (499, 625) & JS click sent for {slot_id}! Check kar le bhai.")
+            if removed:
+                await update.message.reply_text(f"✅ Location popup successfully vaporized from DOM for {slot_id}!")
+            else:
+                await update.message.reply_text(f"⚠️ Us slot par abhi koi popup detect nahi hua.")
         except Exception as exc:
-            await update.message.reply_text(f"❌ Force popup failed: {exc}")
+            await update.message.reply_text(f"❌ Popup remove failed: {exc}")
 
     # =========================================================
-    # AUTO LOCATION POPUP DESTROYER
+    # AUTO LOCATION POPUP VAPORIZER
     # =========================================================
 
     async def _destroy_location_popup(self, page, slot_id: str = "SLOT"):
         for _ in range(4):
             try:
-                await page.evaluate('''() => {
-                    const elements = document.querySelectorAll('button, div, span, a');
+                removed = await page.evaluate('''() => {
+                    let found = false;
+                    const elements = document.querySelectorAll('div, section');
                     for (const el of elements) {
-                        const txt = el.innerText || el.textContent || "";
-                        if (txt.includes('No, stay on this site')) {
-                            el.click();
-                            break;
+                        if (el.innerText && el.innerText.includes('Different Location Detected')) {
+                            const modal = el.closest('div[role="dialog"]') || el.closest('.fixed') || el.closest('.absolute') || el;
+                            if (modal) {
+                                modal.remove();
+                                found = true;
+                            }
                         }
                     }
+                    return found;
                 ''')
                 
-                await page.mouse.click(499, 625)
+                if removed:
+                    log_step(slot_id, "Permanently vaporized location popup from DOM!")
+                    await asyncio.sleep(0.5)
+                    break
                 await asyncio.sleep(0.4)
             except Exception:
                 pass
