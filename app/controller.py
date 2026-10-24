@@ -191,7 +191,7 @@ class AccountController:
         """
         for _ in range(4):
             try:
-                stay_ buttons = [
+                stay_buttons = [
                     page.get_by_text("No, stay on this site", exact=False),
                     page.locator("button:has-text('No, stay on this site')"),
                     page.locator("text=/stay on this site/i"),
@@ -216,13 +216,14 @@ class AccountController:
                 log_step(slot_id, f"Page redirected to {curr_url}! Returning to PlayStation product page...")
                 await page.goto(settings.product_url, wait_until="domcontentloaded", timeout=35000)
                 await asyncio.sleep(2.0)
-                # Fir se location popup check karo
                 stay_loc = page.locator("text=/stay on this site/i")
                 if await stay_loc.count() > 0 and await stay_loc.first.is_visible(timeout=1000):
                     await stay_loc.first.click(force=True)
                     await asyncio.sleep(1.0)
         except Exception as e:
             log_step(slot_id, f"URL check note: {e}")
+
+    
 
     async def _update_live_balance(self, page, account: AccountState) -> str:
         wallet_balance_text = "Balance info not found"
