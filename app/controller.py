@@ -211,66 +211,63 @@ class AccountController:
             pass
         await asyncio.sleep(1.0)
 
-        # Pehle check karo agar pehle se khula ho
+        # 1. Check karo agar login modal pehle se khula ho
         mobile_input = await self._find_mobile_input(page)
         if mobile_input is not None:
             return mobile_input
 
-        # Exact Coordinate Hard Click on Top Right Profile Icon (X: 1145, Y: 35)
+        # 2. Advanced JavaScript DOM Scanner for Rightmost Profile Icon
         try:
-            await page.mouse.click(1145, 35)
-            await asyncio.sleep(1.5)
-            mobile_input = await self._find_mobile_input(page)
-            if mobile_input is not None:
-                return mobile_input
-        except Exception:
-            pass
+            clicked = await page.evaluate('''() => {
+                const header = document.querySelector('header') || document.body;
+                const elements = Array.from(header.querySelectorAll('svg, button, a, div[role="button"], img'));
+                
+                let profileEl = null;
+                let maxRight = -1;
 
-        # Backup JavaScript click on top-right profile SVG/button
-        try:
-            await page.evaluate('''() => {
-                const svgs = Array.from(document.querySelectorAll('svg, button, img'));
-                let rightmost = null;
-                let maxLeft = -1;
-                for(let el of svgs) {
+                for (const el of elements) {
                     const rect = el.getBoundingClientRect();
-                    if(rect.top < 80 && rect.left > 950) {
-                        if(rect.left > maxLeft) {
-                            maxLeft = rect.left;
-                            rightmost = el;
+                    // Top-right header area filter (y < 80, x > window.innerWidth - 350)
+                    if (rect.top >= 0 && rect.top <= 80 && rect.left > window.innerWidth - 350) {
+                        if (rect.left > maxRight) {
+                            maxRight = rect.left;
+                            profileEl = el;
                         }
                     }
                 }
-                if(rightmost) {
-                    const btn = rightmost.closest('button') || rightmost.parentElement || rightmost;
-                    btn.click();
+
+                if (profileEl) {
+                    const clickable = profileEl.closest('button') || profileEl.closest('a') || profileEl.parentElement || profileEl;
+                    if (clickable.tagName === 'A') {
+                        clickable.removeAttribute('href');
+                    }
+                    clickable.dispatchEvent(new MouseEvent('mousedown', { bubbles: true }));
+                    clickable.dispatchEvent(new MouseEvent('mouseup', { bubbles: true }));
+                    clickable.click();
+                    return true;
                 }
-            ''')
-            await asyncio.sleep(1.5)
+                return false;
+            }''')
+
+            await asyncio.sleep(2.0)
             mobile_input = await self._find_mobile_input(page)
             if mobile_input is not None:
                 return mobile_input
         except Exception:
             pass
 
-        # Text click fallback
-        candidates = [
-            page.get_by_text("Login / Sign Up", exact=True),
-            page.get_by_text("Login", exact=True),
-            page.locator("button:has-text('Login')")
-        ]
-        for candidate in candidates:
-            try:
-                if await candidate.count() > 0 and await candidate.first.is_visible(timeout=500):
-                    await candidate.first.click(force=True)
-                    await asyncio.sleep(1.5)
-                    inp = await self._find_mobile_input(page)
-                    if inp:
-                        return inp
-            except Exception:
-                pass
+        # 3. Direct Coordinate Fallback (X: 1145, Y: 35)
+        try:
+            await page.mouse.click(1145, 35)
+            await asyncio.sleep(2.0)
+            mobile_input = await self._find_mobile_input(page)
+            if mobile_input is not None:
+                return mobile_input
+        except Exception:
+            pass
 
         return None
+
 
     async def _find_send_otp_button(self, page):
         candidates = [
