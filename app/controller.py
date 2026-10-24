@@ -203,6 +203,7 @@ class AccountController:
                 pass
         return None
 
+    
     async def _open_login_popup(self, page):
         await asyncio.sleep(1.0)
 
@@ -211,15 +212,20 @@ class AccountController:
             return mobile_input
 
         try:
-            viewport = page.viewport_size
+            # Read actual browser viewport without changing its dimensions
+            dimensions = await page.evaluate(
+                "() => ({width: window.innerWidth, height: window.innerHeight})"
+            )
 
-            if viewport:
-                x = round(viewport["width"] * 1452 / 1536)
-                y = round(viewport["height"] * 38 / 864)
-            else:
-                x, y = 1452, 38
+            width = dimensions["width"]
+            height = dimensions["height"]
 
-            await page.mouse.click(x, y, click_count=1)
+            # Scale screenshot reference coordinates to the actual viewport
+            x = round(width * 1452 / 1536)
+            y = round(height * 38 / 864)
+
+            # Hard click on the profile icon beside the wallet
+            await page.mouse.click(x, y)
             await asyncio.sleep(2.0)
 
             mobile_input = await self._find_mobile_input(page)
@@ -227,7 +233,7 @@ class AccountController:
                 return mobile_input
 
         except Exception as exc:
-            print(f"Profile icon click failed: {exc}")
+            print(f"Profile click failed: {exc}")
 
         return None
 
