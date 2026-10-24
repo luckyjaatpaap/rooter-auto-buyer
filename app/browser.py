@@ -141,37 +141,40 @@ class BrowserManager:
     # ROOTER LOCATION POPUP
     # =========================================================
 
-    async def handle_location_popup(self, page: Page) -> bool:
+    async def handle_location_popup(page: Page) -> bool:
         try:
-            await page.wait_for_timeout(500)
-
-            locator = page.get_by_text("No, stay on this site", exact=True)
-            count = await locator.count()
-
-            for index in range(count):
+            await page.wait_for_timeout(600)
+            
+            # 1. Broad text and keyword matching for location modals
+            keywords = ["no, stay on this site", "stay on this site", "stay", "dismiss", "close"]
+            for kw in keywords:
                 try:
-                    element = locator.nth(index)
-                    if await element.is_visible(timeout=800):
-                        await element.click(timeout=3000)
-                        await page.wait_for_timeout(500)
-                        return True
+                    locator = page.get_by_text(kw, exact=False)
+                    count = await locator.count()
+                    for i in range(count):
+                        el = locator.nth(i)
+                        if await el.is_visible(timeout=500):
+                            await el.click(force=True, timeout=2000)
+                            await page.wait_for_timeout(500)
+                            return True
                 except Exception:
-                    continue
+                    pass
 
-            buttons = page.locator("button")
+            # 2. Button element scanning
+            buttons = page.locator("button, div[role='button'], span")
             button_count = await buttons.count()
 
             for index in range(button_count):
                 try:
-                    button = buttons.nth(index)
-                    if not await button.is_visible(timeout=300):
+                    btn = buttons.nth(index)
+                    if not await btn.is_visible(timeout=300):
                         continue
 
-                    text = await button.inner_text(timeout=800)
+                    text = await btn.inner_text(timeout=500)
                     text = " ".join(text.split()).strip().lower()
 
-                    if text == "no, stay on this site":
-                        await button.click(timeout=3000)
+                    if any(k in text for k in ["stay on this site", "no, stay", "dismiss"]):
+                        await btn.click(force=True, timeout=2000)
                         await page.wait_for_timeout(500)
                         return True
                 except Exception:
@@ -180,6 +183,7 @@ class BrowserManager:
             return False
         except Exception:
             return False
+
 
     # =========================================================
     # OPEN & ENSURE PLAYSTATION PRODUCT
