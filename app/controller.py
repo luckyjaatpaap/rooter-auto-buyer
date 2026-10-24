@@ -136,7 +136,7 @@ class AccountController:
             "/login S1-A1 9876543210 - Login account\n"
             "/otp S1-A1 123456 - Submit OTP\n"
             "/cookie S1-A1 <token> - Quick Short Token Import\n"
-            "/popup S1-A1 - Force dismiss location mismatch popup\n"
+            "/popup S1-A1 - Force coordinate click & dismiss location popup\n"
             "/screen S1-A1 - Live page screenshot\n"
             "/refresh S1-A1 - Hard refresh & start sniper\n"
             "/trigger_buy - Wake up ALL accounts & check stock NOW\n"
@@ -186,7 +186,7 @@ class AccountController:
         await update.message.reply_text(f"✅ RAM cleaned & {healed} slots refreshed! All snipers running.")
 
     # =========================================================
-    # SHORT TOKEN & MANUAL POPUP HANDLERS
+    # SHORT TOKEN & FORCE POPUP HANDLERS
     # =========================================================
 
     async def handle_cookie_import(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -249,53 +249,46 @@ class AccountController:
             if not page.url or page.url == "about:blank":
                 return await update.message.reply_text(f"❌ {slot_id} ka browser page active nahi hai.")
 
-            clicked = await page.evaluate('''() => {
-                let found = false;
+            # 1. JS Click attempt
+            await page.evaluate('''() => {
                 const elements = document.querySelectorAll('button, div, span, a');
                 for (const el of elements) {
                     const txt = el.innerText || el.textContent || "";
                     if (txt.includes('No, stay on this site')) {
                         el.click();
-                        found = true;
                         break;
                     }
                 }
-                return found;
             ''')
 
-            if clicked:
-                await update.message.reply_text(f"✅ Successfully clicked 'No, stay on this site' for {slot_id}!")
-            else:
-                await update.message.reply_text(f"⚠️ Us slot par abhi koi location popup detect nahi hua.")
+            # 2. Exact Screenshot Coordinates for "No, stay on this site" (X: 499, Y: 625)
+            await page.mouse.click(499, 625)
+            await asyncio.sleep(0.3)
+            await page.mouse.click(499, 635)
+
+            await update.message.reply_text(f"🎯 Exact coordinate (499, 625) & JS click sent for {slot_id}! Check kar le bhai.")
         except Exception as exc:
-            await update.message.reply_text(f"❌ Popup handle failed: {exc}")
+            await update.message.reply_text(f"❌ Force popup failed: {exc}")
 
     # =========================================================
     # AUTO LOCATION POPUP DESTROYER
     # =========================================================
 
     async def _destroy_location_popup(self, page, slot_id: str = "SLOT"):
-        for _ in range(5):
+        for _ in range(4):
             try:
-                clicked = await page.evaluate('''() => {
-                    let found = false;
+                await page.evaluate('''() => {
                     const elements = document.querySelectorAll('button, div, span, a');
                     for (const el of elements) {
                         const txt = el.innerText || el.textContent || "";
                         if (txt.includes('No, stay on this site')) {
                             el.click();
-                            found = true;
                             break;
                         }
                     }
-                    return found;
                 ''')
                 
-                if clicked:
-                    log_step(slot_id, "Permanently dismissed location popup via JS injection!")
-                    await asyncio.sleep(0.8)
-                    break
-                
+                await page.mouse.click(499, 625)
                 await asyncio.sleep(0.4)
             except Exception:
                 pass
