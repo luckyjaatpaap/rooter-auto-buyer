@@ -204,43 +204,111 @@ class AccountController:
         return None
 
      async def _open_login_popup(self, page):
-        await asyncio.sleep(1.0)
+        await asyncio.sleep(1.5)
 
+        # Step 1: Check whether the login input is already visible
         mobile_input = await self._find_mobile_input(page)
         if mobile_input is not None:
             return mobile_input
 
-        # Identify the profile icon using visible header elements
+        # Step 2: Inspect common login/profile buttons
+        selectors = [
+            'header button',
+            'header a',
+            'header [role="button"]',
+            'button:has-text("Login")',
+            'button:has-text("Log in")',
+            'button:has-text("Sign in")',
+            'text=Login',
+            'text=Log in',
+            'text=Sign in',
+        ]
+
+        for selector in selectors:
+            try:
+                locator = page.locator(selector)
+                count = await locator.count()
+
+                for index in range(min(count, 20)):
+                    item = locator.nth(index)
+
+                    try:
+                        if not await item.is_visible(timeout=500):
+                            continue
+
+                        text = (
+                            await item.inner_text(timeout=500)
+                        ).strip().lower()
+
+                        # Avoid clicking unrelated navigation controls
+                        if text and not any(
+                            word in text
+                            for word in [
+                                "login",
+                                "log in",
+                                "sign in",
+                            ]
+                        ):
+                            continue
+
+                        await item.click(timeout=2500)
+                        await asyncio.sleep(1.5)
+
+                        mobile_input = await self._find_mobile_input(page)
+                        if mobile_input is not None:
+                            return mobile_input
+
+                    except Exception:
+                        continue
+
+            except Exception:
+                continue
+
+        # Step 3: Wait for a login form that may load asynchronously
+        for _ in range(10):
+            await asyncio.sleep(0.5)
+
+            mobile_input = await self._find_mobile_input(page)
+            if mobile_input is not None:
+                return mobile_input
+
+        # Step 4: Log visible inputs for diagnosis
         try:
-            result = await page.evaluate("""() => {
-                const header = document.querySelector('header');
-                if (!header) return {error: 'Header not found'};
-
-                const items = Array.from(
-                    header.querySelectorAll('button, a, [role="button"]')
-                );
-
-                return {
-                    items: items.map((el, i) => {
+            result = await page.evaluate("""() => ({
+                url: location.href,
+                inputs: Array.from(document.querySelectorAll('input'))
+                    .filter(el => {
                         const r = el.getBoundingClientRect();
-                        return {
-                            index: i,
-                            text: (el.innerText || '').trim().slice(0, 60),
-                            x: Math.round(r.x + r.width / 2),
-                            y: Math.round(r.y + r.height / 2),
-                            width: Math.round(r.width),
-                            height: Math.round(r.height),
-                            visible: r.width > 0 && r.height > 0
-                        };
-                    }).filter(el => el.visible)
-                };
-            }""")
-            print("ROOTER HEADER ELEMENTS:", result)
+                        return r.width > 0 && r.height > 0;
+                    })
+                    .map(el => ({
+                        type: el.type,
+                        placeholder: el.placeholder,
+                        name: el.name,
+                        autocomplete: el.autocomplete
+                    })),
+                buttons: Array.from(
+                    document.querySelectorAll(
+                        'header button, header a, button'
+                    )
+                )
+                .filter(el => {
+                    const r = el.getBoundingClientRect();
+                    return r.width > 0 && r.height > 0;
+                })
+                .slice(0, 25)
+                .map(el => ({
+                    text: (el.innerText || '').trim().slice(0, 60),
+                    ariaLabel: el.getAttribute('aria-label')
+                }))
+            })""")
+
+            print("ROOTER LOGIN DIAGNOSTICS:", result)
+
         except Exception as exc:
-            print("Header inspection failed:", exc)
+            print("Login diagnostics failed:", exc)
 
         return await self._find_mobile_input(page)
-
 
     async def _find_send_otp_button(self, page):
         candidates = [
