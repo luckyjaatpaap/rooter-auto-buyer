@@ -203,39 +203,44 @@ class AccountController:
                 pass
         return None
 
-    
-    async def _open_login_popup(self, page):
+     async def _open_login_popup(self, page):
         await asyncio.sleep(1.0)
 
         mobile_input = await self._find_mobile_input(page)
         if mobile_input is not None:
             return mobile_input
 
+        # Identify the profile icon using visible header elements
         try:
-            # Read actual browser viewport without changing its dimensions
-            dimensions = await page.evaluate(
-                "() => ({width: window.innerWidth, height: window.innerHeight})"
-            )
+            result = await page.evaluate("""() => {
+                const header = document.querySelector('header');
+                if (!header) return {error: 'Header not found'};
 
-            width = dimensions["width"]
-            height = dimensions["height"]
+                const items = Array.from(
+                    header.querySelectorAll('button, a, [role="button"]')
+                );
 
-            # Scale screenshot reference coordinates to the actual viewport
-            x = round(width * 1452 / 1536)
-            y = round(height * 38 / 864)
-
-            # Hard click on the profile icon beside the wallet
-            await page.mouse.click(x, y)
-            await asyncio.sleep(2.0)
-
-            mobile_input = await self._find_mobile_input(page)
-            if mobile_input is not None:
-                return mobile_input
-
+                return {
+                    items: items.map((el, i) => {
+                        const r = el.getBoundingClientRect();
+                        return {
+                            index: i,
+                            text: (el.innerText || '').trim().slice(0, 60),
+                            x: Math.round(r.x + r.width / 2),
+                            y: Math.round(r.y + r.height / 2),
+                            width: Math.round(r.width),
+                            height: Math.round(r.height),
+                            visible: r.width > 0 && r.height > 0
+                        };
+                    }).filter(el => el.visible)
+                };
+            }""")
+            print("ROOTER HEADER ELEMENTS:", result)
         except Exception as exc:
-            print(f"Profile click failed: {exc}")
+            print("Header inspection failed:", exc)
 
-        return None
+        return await self._find_mobile_input(page)
+
 
     async def _find_send_otp_button(self, page):
         candidates = [
