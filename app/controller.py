@@ -243,32 +243,36 @@ class AccountController:
 
     async def _destroy_location_popup(self, page, slot_id: str = "SLOT"):
         """
-        Location popup ko baar-baar check karke tab tak hatayega jab tak woh puri tarah gayab na ho jaye.
+        JavaScript DOM Injection ke zariye 'No, stay on this site' popup ko 
+        hamesha ke liye turant khatam karta hai!
         """
-        for _ in range(8):
+        for _ in range(5):
             try:
-                stay_buttons = [
-                    page.get_by_text("No, stay on this site", exact=False),
-                    page.locator("button:has-text('No, stay on this site')"),
-                    page.locator("text=/stay on this site/i"),
-                    page.locator("div:has-text('No, stay on this site')")
-                ]
-                clicked_any = False
-                for loc in stay_buttons:
-                    if await loc.count() > 0 and await loc.first.is_visible(timeout=800):
-                        await loc.first.click(force=True, timeout=2000)
-                        log_step(slot_id, "Successfully clicked 'No, stay on this site'")
-                        clicked_any = True
-                        await asyncio.sleep(1.0)
-                        break
+                # JavaScript se page ke andar dhoondh kar turant click marwa do
+                clicked = await page.evaluate('''() => {
+                    let found = false;
+                    const elements = document.querySelectorAll('button, div, span, a');
+                    for (const el of elements) {
+                        const txt = el.innerText || el.textContent || "";
+                        if (txt.includes('No, stay on this site')) {
+                            el.click();
+                            found = true;
+                            break;
+                        }
+                    }
+                    return found;
+                ''')
                 
-                if not clicked_any:
-                    # Agar popup nahi dikha toh loop tod do
+                if clicked:
+                    log_step(slot_id, "Permanently dismissed location popup via JS injection!")
+                    await asyncio.sleep(0.8)
                     break
-                await asyncio.sleep(0.5)
+                
+                await asyncio.sleep(0.4)
             except Exception:
                 pass
 
+        # Agar galti se redirect ho gaya ho toh wapas product page par lao
         try:
             curr_url = (page.url or "").lower()
             if curr_url and "playstation" not in curr_url and "about:blank" not in curr_url:
@@ -277,6 +281,7 @@ class AccountController:
                 await asyncio.sleep(2.0)
         except Exception as e:
             log_step(slot_id, f"URL check note: {e}")
+
 
 
     async def _update_live_balance(self, page, account: AccountState) -> str:
