@@ -271,108 +271,81 @@ class AccountController:
         return None
 
     async def _open_login_popup(self, page, slot_id: str = "SLOT"):
-        # Step 1: Sabse pehle Location Popup ko khatam karo
         await self._destroy_location_popup(page, slot_id)
-        await asyncio.sleep(0.8)
+        await asyncio.sleep(1.0)
 
-        # Check agar pehle se mobile input khula hai
         mobile_input = await self._find_mobile_input(page)
         if mobile_input is not None:
-            log_step(slot_id, "Mobile input already visible!")
             return mobile_input
 
-        # Step 2: Top-Right Profile Icon ko locate karke click karo
-        # Screenshot (1200x675) mein top-right mein 2 icons hain: Wallet aur uske right mein Profile Icon
-        log_step(slot_id, "Searching for top-right Profile Icon...")
+        # 1. Forceful JS Click on Rightmost Profile Icon & Remove Link Navigation
         try:
-            icon_info = await page.evaluate('''() => {
-                // Find all SVGs in the top navbar (y between 5 and 75, x > 850)
-                const svgs = Array.from(document.querySelectorAll('svg'));
-                const topRight = [];
-                for (const svg of svgs) {
-                    const r = svg.getBoundingClientRect();
-                    if (r.top >= 5 && r.top <= 75 && r.left > 850 && r.width >= 12 && r.width <= 65) {
-                        topRight.push({
-                            svg: svg,
-                            x: r.left + r.width / 2,
-                            y: r.top + r.height / 2,
-                            left: r.left
-                        });
-                    }
-                }
-                if (topRight.length === 0) return null;
-                // Sort descending by X so index 0 is the rightmost Profile Icon
-                topRight.sort((a, b) => b.left - a.left);
-                const best = topRight[0];
-
-                // Walk up parents to find the clickable wrapper and prevent link navigation if <a>
-                let el = best.svg;
-                for (let i = 0; i < 4 && el; i++) {
-                    if (el.tagName && el.tagName.toLowerCase() === 'a') {
-                        el.removeAttribute('href');
-                    }
-                    el = el.parentElement;
-                }
-
-                return { x: best.x, y: best.y, count: topRight.length };
-            }''')
-
-            if icon_info and "x" in icon_info and "y" in icon_info:
-                px, py = icon_info["x"], icon_info["y"]
-                log_step(slot_id, f"Found Profile Icon at ({px:.1f}, {py:.1f}) [Total top-right SVGs: {icon_info.get('count')}]. Clicking...")
-                await page.mouse.move(px, py)
-                await asyncio.sleep(0.2)
-                await page.mouse.click(px, py)
-                await asyncio.sleep(2.0)
-
-                mobile_input = await self._find_mobile_input(page)
-                if mobile_input is not None:
-                    log_step(slot_id, "Login popup opened via dynamic Profile Icon coordinates!")
-                    return mobile_input
-
-                # Agar click karne par dropdown khula ho jisme "Login" button ho
-                for txt in ["Login / Sign Up", "Login", "Sign In"]:
-                    loc = page.get_by_text(txt, exact=True)
-                    if await loc.count() > 0 and await loc.first.is_visible(timeout=400):
-                        log_step(slot_id, f"Clicking dropdown text '{txt}'...")
-                        await loc.first.click(force=True)
-                        await asyncio.sleep(1.5)
-                        mobile_input = await self._find_mobile_input(page)
-                        if mobile_input is not None:
-                            return mobile_input
-        except Exception as e:
-            log_step(slot_id, f"Dynamic profile click error: {e}")
-
-        # Step 3: Fallback JS Click on rightmost element in top bar
-        try:
-            log_step(slot_id, "Trying direct JS click on rightmost top-bar icon...")
+            log_step(slot_id, "Attempting forced JS click on profile icon...")
             await page.evaluate('''() => {
-                const svgs = Array.from(document.querySelectorAll('svg'));
-                let rightmost = null;
-                let maxX = -1;
-                for (const s of svgs) {
-                    const r = s.getBoundingClientRect();
-                    if (r.top >= 5 && r.top <= 75 && r.left > maxX) {
-                        maxX = r.left;
-                        rightmost = s;
+                const svgs = Array.from(document.querySelectorAll('svg, img, button, a, div[role="button"]'));
+                let target = null;
+                let maxLeft = -1;
+                for (const el of svgs) {
+                    const r = el.getBoundingClientRect();
+                    if (r.top >= 0 && r.top <= 80 && r.left > 850) {
+                        if (r.left > maxLeft) {
+                            maxLeft = r.left;
+                            target = el;
+                        }
                     }
                 }
-                if (rightmost) {
-                    let target = rightmost.closest('button') || rightmost.parentElement || rightmost;
-                    target.dispatchEvent(new MouseEvent('mousedown', { bubbles: true }));
-                    target.dispatchEvent(new MouseEvent('mouseup', { bubbles: true }));
-                    target.click();
+                if (target) {
+                    const anchor = target.closest('a');
+                    if (anchor) {
+                        anchor.removeAttribute('href');
+                        anchor.onclick = (e) => { e.preventDefault(); };
+                    }
+                    const clickable = target.closest('button') || target.closest('div[role="button"]') || target;
+                    clickable.click();
+                    // Also dispatch mouse events
+                    clickable.dispatchEvent(new MouseEvent('mousedown', { bubbles: true }));
+                    clickable.dispatchEvent(new MouseEvent('mouseup', { bubbles: true }));
                 }
-            }''')
+            ''')
             await asyncio.sleep(2.0)
             mobile_input = await self._find_mobile_input(page)
             if mobile_input is not None:
-                log_step(slot_id, "Login popup opened via JS fallback!")
+                log_step(slot_id, "Login popup opened via forced JS click!")
                 return mobile_input
         except Exception as e:
-            log_step(slot_id, f"JS fallback error: {e}")
+            log_step(slot_id, f"JS click note: {e}")
+
+        # 2. Exact Coordinate Hard Click (X: 1145, Y: 35)
+        try:
+            log_step(slot_id, "Trying exact coordinate click (1145, 35)...")
+            await page.mouse.click(1145, 35)
+            await asyncio.sleep(2.0)
+            mobile_input = await self._find_mobile_input(page)
+            if mobile_input is not None:
+                log_step(slot_id, "Login popup opened via coordinate click!")
+                return mobile_input
+        except Exception:
+            pass
+
+        # 3. Fallback: Text Click ("Login" / "Sign Up")
+        candidates = [
+            page.get_by_text("Login / Sign Up", exact=True),
+            page.get_by_text("Login", exact=True),
+        ]
+        for candidate in candidates:
+            try:
+                if await candidate.count() > 0 and await candidate.first.is_visible(timeout=300):
+                    await candidate.first.click(force=True, timeout=2000)
+                    await asyncio.sleep(1.5)
+                    mobile_input = await self._find_mobile_input(page)
+                    if mobile_input is not None:
+                        log_step(slot_id, "Login popup opened via text click!")
+                        return mobile_input
+            except Exception:
+                pass
 
         return None
+
 
     async def _find_send_otp_button(self, page):
         """
