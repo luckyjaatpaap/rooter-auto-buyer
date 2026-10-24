@@ -211,13 +211,41 @@ class AccountController:
             pass
         await asyncio.sleep(1.0)
 
+        # Pehle check karo agar pehle se khula ho
         mobile_input = await self._find_mobile_input(page)
         if mobile_input is not None:
             return mobile_input
 
-        # Simple coordinate click on profile icon (Top Right)
+        # Exact Coordinate Hard Click on Top Right Profile Icon (X: 1145, Y: 35)
         try:
-            await page.mouse.click(1134, 35)
+            await page.mouse.click(1145, 35)
+            await asyncio.sleep(1.5)
+            mobile_input = await self._find_mobile_input(page)
+            if mobile_input is not None:
+                return mobile_input
+        except Exception:
+            pass
+
+        # Backup JavaScript click on top-right profile SVG/button
+        try:
+            await page.evaluate('''() => {
+                const svgs = Array.from(document.querySelectorAll('svg, button, img'));
+                let rightmost = null;
+                let maxLeft = -1;
+                for(let el of svgs) {
+                    const rect = el.getBoundingClientRect();
+                    if(rect.top < 80 && rect.left > 950) {
+                        if(rect.left > maxLeft) {
+                            maxLeft = rect.left;
+                            rightmost = el;
+                        }
+                    }
+                }
+                if(rightmost) {
+                    const btn = rightmost.closest('button') || rightmost.parentElement || rightmost;
+                    btn.click();
+                }
+            ''')
             await asyncio.sleep(1.5)
             mobile_input = await self._find_mobile_input(page)
             if mobile_input is not None:
@@ -300,7 +328,7 @@ class AccountController:
         ]
         for locator in candidates:
             try:
-                if await locator.count() > 0 and await locator.first.is_visible(timeout=300):
+                if await locator.count() > 0 and await locator.first.is_visible(timeout=500):
                     return locator.first
             except Exception:
                 pass
