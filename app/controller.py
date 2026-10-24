@@ -203,145 +203,71 @@ class AccountController:
                 pass
         return None
 
+
     async def _open_login_popup(self, page):
         await asyncio.sleep(2)
 
-        # 1. Agar login form pehle se khula hai, use reuse karo
+        # Check if login form is already visible
         mobile_input = await self._find_mobile_input(page)
         if mobile_input is not None:
+            print("ROOTER DIAG: Mobile input already visible")
             return mobile_input
 
-        # 2. Profile/account/login buttons aur links dhoondo
-        profile_selectors = [
-            'header [aria-label*="profile" i]',
-            'header [aria-label*="account" i]',
-            'header [aria-label*="user" i]',
-            'header [title*="profile" i]',
-            'header [title*="account" i]',
-            'header a[href*="login" i]',
-            'header a[href*="account" i]',
-            'header a[href*="profile" i]',
-            'header button',
-            'header a',
-            'header [role="button"]',
-            'button[aria-label*="profile" i]',
-            'button[aria-label*="account" i]',
-            'button[aria-label*="login" i]',
-            'button[title*="profile" i]',
-            'button[title*="account" i]',
-        ]
-
-        clicked = False
-
-        for selector in profile_selectors:
-            try:
-                elements = page.locator(selector)
-                count = min(await elements.count(), 30)
-
-                for index in range(count):
-                    item = elements.nth(index)
-
-                    try:
-                        if not await item.is_visible(timeout=700):
-                            continue
-
-                        details = await item.evaluate("""el => ({
-                            text: (el.innerText || '').trim().toLowerCase(),
-                            aria: (el.getAttribute('aria-label') || '').toLowerCase(),
-                            title: (el.getAttribute('title') || '').toLowerCase(),
-                            href: (el.getAttribute('href') || '').toLowerCase(),
-                            testid: (el.getAttribute('data-testid') || '').toLowerCase(),
-                            html: el.outerHTML.slice(0, 500)
-                        })""")
-
-                        text = details.get("text", "")
-                        aria = details.get("aria", "")
-                        title = details.get("title", "")
-                        href = details.get("href", "")
-                        testid = details.get("testid", "")
-                        html = details.get("html", "").lower()
-
-                        # Sirf login/profile/account se related element click karo
-                        keywords = (
-                            "profile", "account", "login", "log in",
-                            "sign in", "signin", "user"
-                        )
-
-                        has_keyword = any(
-                            word in value
-                            for value in (text, aria, title, href, testid, html)
-                            for word in keywords
-                        )
-
-                        # Header ke har button ko blindly click mat karo
-                        if not has_keyword:
-                            continue
-
-                        print(
-                            "ROOTER PROFILE CANDIDATE:",
-                            selector,
-                            details
-                        )
-
-                        await item.click(timeout=3000)
-                        clicked = True
-                        print("ROOTER PROFILE CLICKED:", selector)
-                        await asyncio.sleep(2)
-
-                        mobile_input = await self._find_mobile_input(page)
-                        if mobile_input is not None:
-                            print("ROOTER MOBILE INPUT FOUND")
-                            return mobile_input
-
-                        # Click ke baad popup animation/load hone ka wait
-                        for _ in range(6):
-                            await asyncio.sleep(0.5)
-                            mobile_input = await self._find_mobile_input(page)
-                            if mobile_input is not None:
-                                print("ROOTER MOBILE INPUT FOUND AFTER WAIT")
-                                return mobile_input
-
-                    except Exception as exc:
-                        print("Profile candidate skipped:", str(exc)[:180])
-                        continue
-
-            except Exception as exc:
-                print("Profile selector failed:", selector, str(exc)[:150])
-
-        # 3. Diagnose karo; galat element click karke aage mat badho
+        # Diagnostic only: inspect actual clickable controls.
+        # Do not click any unverified icon yet.
         try:
-            diagnostic = await page.evaluate("""() => ({
-                url: location.href,
-                title: document.title,
-                header: Array.from(document.querySelectorAll(
-                    'header button, header a, header [role="button"]'
-                )).filter(el => {
+            info = await page.evaluate("""() => {
+                const visible = el => {
                     const r = el.getBoundingClientRect();
-                    return r.width > 0 && r.height > 0;
-                }).map(el => ({
-                    text: (el.innerText || '').trim().slice(0, 80),
-                    aria: el.getAttribute('aria-label'),
-                    title: el.getAttribute('title'),
-                    href: el.getAttribute('href'),
-                    html: el.outerHTML.slice(0, 350)
-                })).slice(0, 35),
-                inputs: Array.from(document.querySelectorAll('input'))
-                    .filter(el => {
-                        const r = el.getBoundingClientRect();
-                        return r.width > 0 && r.height > 0;
-                    }).map(el => ({
-                        type: el.type,
-                        placeholder: el.placeholder,
-                        name: el.name
-                    }))
-            })""")
+                    const s = getComputedStyle(el);
+                    return r.width > 0 && r.height > 0 &&
+                        s.display !== 'none' &&
+                        s.visibility !== 'hidden';
+                };
 
-            print("ROOTER PROFILE DIAGNOSTICS:", diagnostic)
+                return {
+                    url: location.href,
+                    title: document.title,
+                    viewport: {
+                        width: window.innerWidth,
+                        height: window.innerHeight
+                    },
+                    controls: Array.from(document.querySelectorAll(
+                        'button, a, [role="button"], [tabindex="0"]'
+                    )).filter(visible).map((el, i) => {
+                        const r = el.getBoundingClientRect();
+                        return {
+                            index: i,
+                            tag: el.tagName,
+                            text: (el.innerText || '').trim().slice(0, 80),
+                            aria: el.getAttribute('aria-label'),
+                            title: el.getAttribute('title'),
+                            href: el.getAttribute('href'),
+                            testid: el.getAttribute('data-testid'),
+                            x: Math.round(r.x),
+                            y: Math.round(r.y),
+                            width: Math.round(r.width),
+                            height: Math.round(r.height),
+                            html: el.outerHTML.slice(0, 350)
+                        };
+                    }).slice(0, 100),
+                    inputs: Array.from(document.querySelectorAll('input'))
+                        .filter(visible).map(el => ({
+                            type: el.type,
+                            placeholder: el.placeholder,
+                            name: el.name
+                        }))
+                };
+            }""")
+
+            print("ROOTER LOGIN DIAGNOSTIC START")
+            print("ROOTER LOGIN DIAGNOSTIC:", info)
+            print("ROOTER LOGIN DIAGNOSTIC END")
 
         except Exception as exc:
-            print("ROOTER DIAGNOSTICS FAILED:", str(exc))
+            print("ROOTER LOGIN DIAGNOSTIC ERROR:", repr(exc))
 
-        print("ROOTER LOGIN POPUP NOT FOUND. Profile click attempted:", clicked)
+        # Do not guess-click; return control to the existing login handler.
         return await self._find_mobile_input(page)
 
 
