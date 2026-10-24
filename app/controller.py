@@ -276,7 +276,6 @@ class AccountController:
 
         return None
 
-
     async def _find_send_otp_button(self, page):
         candidates = [
             page.get_by_role("button", name="Continue", exact=False),
