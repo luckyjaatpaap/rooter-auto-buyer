@@ -203,7 +203,6 @@ class AccountController:
                 pass
         return None
 
-    
     async def _open_login_popup(self, page):
         await asyncio.sleep(1.0)
 
@@ -212,20 +211,25 @@ class AccountController:
             return mobile_input
 
         try:
-            # Direct hard click on Rooter profile icon
-            # Coordinates based on the supplied 1536x864 screenshot
-            await page.mouse.click(1452, 38)
+            viewport = page.viewport_size
+
+            if viewport:
+                x = round(viewport["width"] * 1452 / 1536)
+                y = round(viewport["height"] * 38 / 864)
+            else:
+                x, y = 1452, 38
+
+            await page.mouse.click(x, y, click_count=1)
             await asyncio.sleep(2.0)
 
             mobile_input = await self._find_mobile_input(page)
             if mobile_input is not None:
                 return mobile_input
 
-        except Exception:
-            pass
+        except Exception as exc:
+            print(f"Profile icon click failed: {exc}")
 
         return None
-
 
     async def _find_send_otp_button(self, page):
         candidates = [
