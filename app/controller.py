@@ -44,7 +44,6 @@ class AccountController:
             slot_id = f"S{service_number}-A{account_number}"
             state = AccountState(slot_id=slot_id)
 
-            # Volume se saved session aur phone number auto-load karna
             try:
                 session_dir = self.browser.sessions.session_path(slot_id)
                 storage_file = session_dir / "storage_state.json"
@@ -60,7 +59,6 @@ class AccountController:
             self.accounts[slot_id] = state
 
     def _ensure_snipers_running(self) -> int:
-        """Jo bhi accounts logged in hain aur unka sniper band hai, unhe turant chalu karega."""
         started = 0
         for slot_id, acc in self.accounts.items():
             if acc.logged_in:
@@ -168,8 +166,26 @@ class AccountController:
         await update.message.reply_text(f"✅ RAM cleaned & {healed} slots refreshed! All snipers running.")
 
     # =========================================================
-    # LOGIN / OTP HELPER LOCATORS & BALANCE PARSER
+    # LOCATION POPUP KILLER & LOGIN / OTP HELPER LOCATORS
     # =========================================================
+
+    async def _kill_location_popup(self, page):
+        """
+        Different Location Detected पॉपअप में 'No, stay on this site' पर क्लिक करता है
+        ताकि गलती से 'Yes, switch to local site' दबकर Home Page पर न चला जाए!
+        """
+        try:
+            stay_btn = page.locator("text=/No, stay on this site/i")
+            if await stay_btn.count() > 0 and await stay_btn.first.is_visible(timeout=800):
+                await stay_btn.first.click(force=True, timeout=2000)
+                await asyncio.sleep(0.8)
+        except Exception:
+            pass
+
+        try:
+            await self.browser.handle_location_popup(page)
+        except Exception:
+            pass
 
     async def _update_live_balance(self, page, account: AccountState) -> str:
         wallet_balance_text = "Balance info not found"
@@ -186,8 +202,11 @@ class AccountController:
 
     async def _find_mobile_input(self, page):
         selectors = [
-            'input[type="tel"]', 'input[inputmode="tel"]', 'input[name="phone"]',
-            'input[placeholder*="mobile" i]', 'input[placeholder*="number" i]'
+            'input[type="tel"]',
+            'input[inputmode="tel"]',
+            'input[name="phone"]',
+            'input[placeholder*="mobile" i]',
+            'input[placeholder*="number" i]',
         ]
         for selector in selectors:
             try:
@@ -204,89 +223,103 @@ class AccountController:
         return None
 
     async def _open_login_popup(self, page):
-        # 1. Location popup ("No, stay on this site") ko handle karna aur page ko upar rakhna
-        try:
-            await self.browser.handle_location_popup(page)
-            await page.evaluate("window.scrollTo(0, 0)")
-        except Exception:
-            pass
+        # 1. सबसे पहले लोकेशन पॉपअप हटाओ और चेक करो कि हम PlayStation पेज पर ही हैं
+        await self._kill_location_popup(page)
         await asyncio.sleep(1.0)
 
-        # Agar mobile input pehle se khula hai
+        if "playstation" not in (page.url or "").lower():
+            try:
+                await page.goto(settings.product_url, wait_until="domcontentloaded", timeout=35000)
+                await asyncio.sleep(2.0)
+                await self._kill_location_popup(page)
+            except Exception:
+                pass
+
         mobile_input = await self._find_mobile_input(page)
         if mobile_input is not None:
             return mobile_input
 
-        # 2. ORIGINAL PRE-DUSSEHRA METHOD:
-        # Playwright Native Locators se Top-Right Profile Icon (SVG / Avatar / Button) ko dhoondh kar real click karna
+        # 2. ORIGINAL PRE-DUSSEHRA FLOW (Fixed for current Rooter DOM without <header> tag)
+        # ऊपर वाली पट्टी (top < 75) में सबसे दाईं तरफ (rightmost) जो प्रोफाइल आइकॉन है,
+        # उसके असली क्लिक होने वाले बॉक्स का सेंटर निकाल कर Playwright से क्लिक करो
         try:
-            svgs = page.locator("svg:visible")
-            count = await svgs.count()
-            top_right_svgs = []
+            profile_coords = await page.evaluate('''() => {
+                const svgs = Array.from(document.querySelectorAll('svg, img, .mantine-Avatar-root'));
+                let rightmost = null;
+                let maxX = -1;
 
-            for i in range(count):
-                el = svgs.nth(i)
-                box = await el.bounding_box()
-                # Top navbar mein right side (y < 80, x > 900) wale icons collect karo
-                if box and 0 <= box["y"] <= 80 and box["x"] >= 900:
-                    top_right_svgs.append((box["x"], el))
+                for (const el of svgs) {
+                    const rect = el.getBoundingClientRect();
+                    // Top bar icons: y is between 5 and 70, x is on the right side (> 800)
+                    if (rect.top >= 5 && rect.top <= 70 && rect.width >= 14 && rect.width <= 60 && rect.left > 800) {
+                        if (rect.left > maxX) {
+                            maxX = rect.left;
+                            rightmost = el;
+                        }
+                    }
+                }
 
-            if top_right_svgs:
-                # Sabse right-side wala icon Profile Icon hota hai
-                top_right_svgs.sort(key=lambda item: item[0], reverse=True)
-                profile_svg = top_right_svgs[0][1]
+                if (!rightmost) return null;
 
-                # Pehle uske clickable parent container par Playwright ka real click maro
-                try:
-                    parent = profile_svg.locator("xpath=..")
-                    await parent.click(force=True, timeout=2000)
-                except Exception:
-                    pass
+                // Click event on both SVG and its parent containers
+                let target = rightmost;
+                for (let i = 0; i < 3 && target; i++) {
+                    try {
+                        target.dispatchEvent(new MouseEvent('mousedown', { bubbles: true }));
+                        target.dispatchEvent(new MouseEvent('mouseup', { bubbles: true }));
+                        target.click();
+                    } catch (e) {}
+                    target = target.parentElement;
+                }
 
-                await asyncio.sleep(1.0)
-                mobile_input = await self._find_mobile_input(page)
-                if mobile_input is not None:
-                    return mobile_input
+                const r = (rightmost.parentElement || rightmost).getBoundingClientRect();
+                return { x: r.left + r.width / 2, y: r.top + r.height / 2 };
+            }''')
 
-                # Agar parent click se nahi khula toh direct SVG locator par real Playwright click maro
-                try:
-                    await profile_svg.click(force=True, timeout=2000)
-                except Exception:
-                    pass
+            await asyncio.sleep(1.5)
+            mobile_input = await self._find_mobile_input(page)
+            if mobile_input is not None:
+                return mobile_input
 
-                await asyncio.sleep(1.5)
+            # अगर JS क्लिक से नहीं खुला, तो उसी आइकॉन के सटीक सेंटर पर Playwright का असली माउस क्लिक मारो
+            if profile_coords and "x" in profile_coords and "y" in profile_coords:
+                await page.mouse.click(profile_coords["x"], profile_coords["y"])
+                await asyncio.sleep(2.0)
                 mobile_input = await self._find_mobile_input(page)
                 if mobile_input is not None:
                     return mobile_input
         except Exception:
             pass
 
-        # 3. Mantine Avatar / ActionIcon / Header Button Locators (Pre-Dussehra Backup)
-        avatar_selectors = [
-            ".mantine-Avatar-root",
-            ".mantine-ActionIcon-root",
-            "header button",
-            "header svg",
-            "nav button",
-            "nav svg",
-        ]
-        for sel in avatar_selectors:
-            try:
-                loc = page.locator(f"{sel} >> visible=true")
-                if await loc.count() > 0:
-                    await loc.last.click(force=True, timeout=2000)
-                    await asyncio.sleep(1.5)
+        # 3. अगर प्रोफाइल आइकॉन के बगल वाले वॉलेट आइकॉन पर क्लिक करने से लॉगिन खुलता है तो उसे भी ट्राई करो
+        try:
+            wallet_coords = await page.evaluate('''() => {
+                const svgs = Array.from(document.querySelectorAll('svg'));
+                const topIcons = [];
+                for (const el of svgs) {
+                    const r = el.getBoundingClientRect();
+                    if (r.top >= 5 && r.top <= 70 && r.width >= 14 && r.width <= 60 && r.left > 800) {
+                        topIcons.push({ x: r.left + r.width / 2, y: r.top + r.height / 2, left: r.left });
+                    }
+                }
+                topIcons.sort((a, b) => b.left - a.left);
+                return topIcons;
+            }''')
+            if wallet_coords and len(wallet_coords) >= 1:
+                # पहले सबसे राइट वाला (Profile), फिर उसके बगल वाला (Wallet)
+                for icon in wallet_coords[:2]:
+                    await page.mouse.click(icon["x"], icon["y"])
+                    await asyncio.sleep(1.8)
                     mobile_input = await self._find_mobile_input(page)
                     if mobile_input is not None:
                         return mobile_input
-            except Exception:
-                pass
+        except Exception:
+            pass
 
-        # 4. Text-based Login / Sign Up buttons (Original Fallback)
+        # 4. Text fallback (Login / Sign Up)
         candidates = [
             page.get_by_text("Login / Sign Up", exact=True),
             page.get_by_text("Login", exact=True),
-            page.get_by_role("button", name="Login", exact=False),
         ]
         for candidate in candidates:
             try:
@@ -294,7 +327,7 @@ class AccountController:
                     await candidate.first.click(force=True, timeout=2000)
                     await asyncio.sleep(1.5)
                     mobile_input = await self._find_mobile_input(page)
-                    if mobile_input is not None:
+                    if mobile_input:
                         return mobile_input
             except Exception:
                 pass
@@ -334,6 +367,9 @@ class AccountController:
                 for index in range(count):
                     item = locator.nth(index)
                     if await item.is_visible(timeout=300):
+                        ph = (await item.get_attribute("placeholder") or "").lower()
+                        if "search" in ph or "bgmi" in ph or "mobile" in ph or "phone" in ph:
+                            continue
                         found.append(item)
                 if found:
                     return found
@@ -391,12 +427,8 @@ class AccountController:
             await update.message.reply_text(f"🔍 Opening product page for {slot_id}...")
 
             page = await self.browser.open_product_page(slot_id)
-
-            try:
-                await self.browser.handle_location_popup(page)
-                await asyncio.sleep(1.5)
-            except Exception:
-                pass
+            await asyncio.sleep(1.5)
+            await self._kill_location_popup(page)
 
             account.update(phone_number=phone_number, active=True, current_page="🔐 Handling Login", last_error=None)
 
@@ -514,7 +546,7 @@ class AccountController:
             slot_id = context.args[0].upper()
             account = self.get_account(slot_id)
 
-            page = await self.browser.ensure_product_page(slot_id)
+            page = await self.browser.get_page(slot_id)
             screenshot_path = self.screenshots_dir / f"{slot_id}.png"
             await page.screenshot(path=str(screenshot_path), full_page=False)
             await self.telegram.send_photo(photo_path=str(screenshot_path), caption=f"🖥 {slot_id}\nState: {account.current_page}")
@@ -561,18 +593,13 @@ class AccountController:
             slot_id = context.args[0].upper()
             account = self.get_account(slot_id)
 
-            # 1. Sniper task ko rokna
             task = self.sniper_tasks.pop(slot_id, None)
             if task and not task.done():
                 task.cancel()
 
-            # 2. Browser RAM se tab/context permanently close karna
             await self.browser.close_slot(slot_id)
-
-            # 3. Volume se session data aur files delete karna
             self.browser.sessions.delete_session(slot_id)
-            
-            # Extra: Meta file (phone number) bhi delete karna agar ho toh
+
             try:
                 session_dir = self.browser.sessions.session_path(slot_id)
                 meta_file = session_dir / "meta.json"
@@ -581,7 +608,6 @@ class AccountController:
             except Exception:
                 pass
 
-            # State ko fresh reset karna
             account.update(
                 phone_number=None,
                 logged_in=False,
@@ -590,11 +616,10 @@ class AccountController:
                 last_error=None,
                 wallet_balance=None
             )
-            
+
             await update.message.reply_text(f"🚪 Successfully logged out & RAM freed for {slot_id}. Slot is now fresh for a new account!")
         except Exception as exc:
             await update.message.reply_text(f"❌ Logout failed: {exc}")
-
 
     # =========================================================
     # 🎯 SWARM ATTACK SNIPER BACKGROUND WORKER (SELF-HEALING)
@@ -602,7 +627,6 @@ class AccountController:
     async def _sniper_worker(self, slot_id: str):
         account = self.get_account(slot_id)
 
-        # Smart Stagger: Har slot ko 4-4 second ke gap par start karega taaki ek sath CPU spike na ho
         try:
             slot_num = int(slot_id.split("-A")[-1])
             await asyncio.sleep((slot_num - 1) * 4)
@@ -623,7 +647,6 @@ class AccountController:
                     except Exception:
                         pass
 
-                # 1. 30-SECOND WAIT PHASE (OR SWARM TRIGGERED)
                 last_time = datetime.now().strftime("%I:%M:%S %p")
                 account.update(current_page=f"⏳ [STAGE: 30s Wait] (Last: {last_time})", last_error=None)
 
@@ -638,16 +661,12 @@ class AccountController:
 
                 page = await self.browser.get_page(slot_id)
 
-                # 2. ANTI-CACHE HARD REFRESH
                 account.update(current_page="🔄 [STAGE: Hard Refreshing Page]")
                 cache_buster = int(time.time())
                 fresh_url = f"{settings.product_url}?cb={cache_buster}" if "?" not in settings.product_url else f"{settings.product_url}&cb={cache_buster}"
 
                 await page.goto(fresh_url, wait_until="domcontentloaded", timeout=35000)
-                try:
-                    await self.browser.handle_location_popup(page)
-                except Exception:
-                    pass
+                await self._kill_location_popup(page)
                 await asyncio.sleep(2.0)
 
                 content = await page.content()
@@ -656,7 +675,6 @@ class AccountController:
                     await asyncio.sleep(4.0)
                     continue
 
-                # 3. AGGRESSIVE 5000 SELECTION
                 account.update(current_page="🎯 [STAGE: Selecting Rs.5000]")
                 rs_5000_locator = page.locator("text=Rs.5000 Wallet Code >> visible=true")
 
@@ -680,7 +698,6 @@ class AccountController:
                 await asyncio.sleep(1.5)
                 await self._update_live_balance(page, account)
 
-                # 4. STOCK CHECK RADAR
                 account.update(current_page="🔍 [STAGE: Checking for Pay Button]")
                 pay_btn_1 = page.locator("button >> text='Pay via wallet' >> visible=true").first
                 is_in_stock = False
@@ -699,11 +716,9 @@ class AccountController:
                 # 🚨 STOCK DETECTED - TRIGGER SWARM & BUY
                 # ==========================================
                 account.update(current_page="🚨 [STAGE: INITIATING SWARM BUY FLOW!]")
-                
-                # 🔥 Yahan baki saare accounts ki neend todne ke liye trigger bhej diya
+
                 if not self.stock_event.is_set():
                     self.stock_event.set()
-                    # 3 second baad event clear ho jayega taaki loop normal chale
                     asyncio.create_task(self._clear_stock_event_delayed())
 
                 await self.telegram.send_message(f"🚨 STOCK DETECTED in {slot_id}! Swarm attack initiated across all accounts...")
