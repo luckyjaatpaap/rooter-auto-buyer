@@ -224,94 +224,55 @@ class AccountController:
 
     async def _click_top_right_profile_icon(self, page):
         """
-        Top-right header mein jo Profile Icon (aur Wallet Icon) hai,
-        uske exact DOM element aur coordinates dono ko trigger karta hai.
+        Top-right profile icon par click karega aur agar wo link hai toh 
+        page ko redirect hone se roke ga taaki home page par na jaye.
         """
-        # 1. JS + BoundingBox Native Mouse Click on rightmost header SVG/Icon
         try:
-            target_info = await page.evaluate('''() => {
+            clicked = await page.evaluate('''() => {
                 const all = Array.from(document.querySelectorAll('svg, button, a, img, [role="button"], div'));
                 const candidates = [];
                 for (const el of all) {
                     const r = el.getBoundingClientRect();
-                    if (r.top >= 8 && r.top <= 75 && r.left >= 1000 && r.width >= 15 && r.width <= 60 && r.height >= 15 && r.height <= 60) {
-                        candidates.push({
-                            el: el,
-                            x: r.left + r.width / 2,
-                            y: r.top + r.height / 2,
-                            right: r.right
-                        });
+                    if (r.top >= 5 && r.top <= 80 && r.left >= 980 && r.width >= 15 && r.width <= 70 && r.height >= 15 && r.height <= 70) {
+                        candidates.push({ el: el, right: r.right });
                     }
                 }
-                if (candidates.length === 0) return null;
+                if (candidates.length === 0) return false;
+                
                 candidates.sort((a, b) => b.right - a.right);
-                const rightmost = candidates[0];
+                const target = candidates[0].el;
 
-                let curr = rightmost.el;
-                for (let i = 0; i < 4 && curr; i++) {
-                    try {
-                        curr.dispatchEvent(new PointerEvent('pointerdown', { bubbles: true, cancelable: true }));
-                        curr.dispatchEvent(new MouseEvent('mousedown', { bubbles: true, cancelable: true }));
-                        curr.dispatchEvent(new PointerEvent('pointerup', { bubbles: true, cancelable: true }));
-                        curr.dispatchEvent(new MouseEvent('mouseup', { bubbles: true, cancelable: true }));
-                        curr.click();
-                    } catch (e) {}
-                    curr = curr.parentElement;
+                // Agar ye link hai toh default jump/navigation roko
+                const anchor = target.closest('a');
+                if (anchor) {
+                    anchor.setAttribute('href', 'javascript:void(0)');
+                    anchor.onclick = (e) => e.preventDefault();
                 }
-                return { x: rightmost.x, y: rightmost.y };
+
+                // Click events fire karo
+                target.dispatchEvent(new MouseEvent('mousedown', { bubbles: true }));
+                target.dispatchEvent(new MouseEvent('mouseup', { bubbles: true }));
+                target.click();
+                return true;
             }''')
 
-            await asyncio.sleep(1.2)
+            await asyncio.sleep(1.5)
             if await self._find_mobile_input(page) is not None:
                 return True
-
-            if target_info and "x" in target_info and "y" in target_info:
-                await page.mouse.move(target_info["x"], target_info["y"])
-                await asyncio.sleep(0.2)
-                await page.mouse.click(target_info["x"], target_info["y"])
-                await asyncio.sleep(1.5)
-                if await self._find_mobile_input(page) is not None:
-                    return True
         except Exception:
             pass
 
-        # 2. Direct Playwright Locator click on last SVG in header/nav
-        locators_to_try = [
-            page.locator("header svg").last,
-            page.locator("nav svg").last,
-        ]
-        for loc in locators_to_try:
-            try:
-                if await loc.count() > 0:
-                    box = await loc.bounding_box()
-                    if box and box["y"] < 85 and box["x"] > 1000:
-                        await loc.click(force=True, timeout=2000)
-                        await asyncio.sleep(1.5)
-                        if await self._find_mobile_input(page) is not None:
-                            return True
-            except Exception:
-                pass
-
-        # 3. Exact Pixel Sweep across the top-right Profile & Wallet Icons (from 1200x675 screenshot)
-        pixel_targets = [
-            (1134, 42),
-            (1134, 32),
-            (1136, 36),
-            (1097, 42),
-            (1097, 32),
-        ]
-        for px, py in pixel_targets:
-            try:
-                await page.mouse.move(px, py)
-                await asyncio.sleep(0.15)
-                await page.mouse.click(px, py)
-                await asyncio.sleep(1.5)
-                if await self._find_mobile_input(page) is not None:
-                    return True
-            except Exception:
-                pass
+        # Fallback: Agar JS se na ho toh exact coordinates par click (No redirect risk)
+        try:
+            await page.mouse.click(1134, 42)
+            await asyncio.sleep(1.5)
+            if await self._find_mobile_input(page) is not None:
+                return True
+        except Exception:
+            pass
 
         return False
+
 
     async def _open_login_popup(self, page):
         # Step 1: Sabse pehle Location Popup ("No, stay on this site") ko 100% hatao
