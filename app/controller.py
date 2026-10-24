@@ -134,7 +134,7 @@ class AccountController:
             "/status - Live status, balance & last check time\n"
             "/login S1-A1 9876543210 - Login account\n"
             "/otp S1-A1 123456 - Submit OTP\n"
-            "/cookie S1-A1 [JSON] - Direct Cookie Import (Bypass Login)\n"
+            "/cookie S1-A1 <user_auth_token> - Quick Short Token Import\n"
             "/screen S1-A1 - Live page screenshot\n"
             "/refresh S1-A1 - Hard refresh & start sniper\n"
             "/trigger_buy - Wake up ALL accounts & check stock NOW\n"
@@ -184,32 +184,58 @@ class AccountController:
         await update.message.reply_text(f"✅ RAM cleaned & {healed} slots refreshed! All snipers running.")
 
     # =========================================================
-    # COOKIE IMPORT HANDLER (BYPASS LOGIN JUGAD)
+    # SHORT TOKEN COOKIE IMPORT HANDLER
     # =========================================================
 
     async def handle_cookie_import(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         try:
             if not context.args or len(context.args) < 2:
-                return await update.message.reply_text("❌ Format:\n/cookie S1-A1 [PASTE_JSON_COOKIE]")
+                return await update.message.reply_text("❌ Format:\n/cookie S1-A1 <user_auth_token_value>")
             
             slot_id = context.args[0].upper()
-            cookie_json_str = " ".join(context.args[1:])
+            token_value = context.args[1].strip()
             
             account = self.get_account(slot_id)
-            parsed_cookies = json.loads(cookie_json_str)
+            
+            minimal_cookies = [
+                {
+                    "domain": ".rooter.gg",
+                    "expirationDate": 1824388078,
+                    "hostOnly": False,
+                    "httpOnly": False,
+                    "name": "user_auth",
+                    "path": "/",
+                    "sameSite": "Lax",
+                    "secure": True,
+                    "session": False,
+                    "value": token_value
+                },
+                {
+                    "domain": ".rooter.gg",
+                    "expirationDate": 1824388078,
+                    "hostOnly": False,
+                    "httpOnly": False,
+                    "name": "client_id",
+                    "path": "/",
+                    "sameSite": "Lax",
+                    "secure": True,
+                    "session": False,
+                    "value": "08c76d30-cf1b-11f1-bb91-a7a0572fd2db"
+                }
+            ]
             
             session_dir = self.browser.sessions.session_path(slot_id)
             session_dir.mkdir(parents=True, exist_ok=True)
             storage_file = session_dir / "storage_state.json"
             
-            playwright_state = {"cookies": parsed_cookies, "origins": []}
+            playwright_state = {"cookies": minimal_cookies, "origins": []}
             storage_file.write_text(json.dumps(playwright_state))
             
-            account.update(logged_in=True, active=True, current_page="✅ Cookie Imported & Ready", last_error=None)
-            log_step(slot_id, "Cookies imported successfully via Telegram command.")
-            await update.message.reply_text(f"✅ Success! Session cookies imported for {slot_id}.\nAb `/refresh {slot_id}` bhej kar check kar le!")
+            account.update(logged_in=True, active=True, current_page="✅ Short Token Imported", last_error=None)
+            log_step(slot_id, "Short token imported successfully via Telegram command.")
+            await update.message.reply_text(f"✅ Success! Short token set for {slot_id}.\nAb `/refresh {slot_id}` bhej kar check kar le!")
         except Exception as exc:
-            await update.message.reply_text(f"❌ Cookie import failed: {exc}")
+            await update.message.reply_text(f"❌ Short token import failed: {exc}")
 
     # =========================================================
     # LOCATION POPUP DESTROYER & LOGIN / OTP HELPER LOCATORS
