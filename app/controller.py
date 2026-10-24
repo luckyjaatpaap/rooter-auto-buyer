@@ -103,6 +103,7 @@ class AccountController:
         self.telegram.register_command("login", self.handle_login)
         self.telegram.register_command("otp", self.handle_otp)
         self.telegram.register_command("cookie", self.handle_cookie_import)
+        self.telegram.register_command("popup", self.handle_force_popup)
         self.telegram.register_command("logout", self.handle_logout)
         self.telegram.register_command("screen", self.handle_screen)
         self.telegram.register_command("refresh", self.handle_refresh)
@@ -134,7 +135,8 @@ class AccountController:
             "/status - Live status, balance & last check time\n"
             "/login S1-A1 9876543210 - Login account\n"
             "/otp S1-A1 123456 - Submit OTP\n"
-            "/cookie S1-A1 <user_auth_token> - Quick Short Token Import\n"
+            "/cookie S1-A1 <token> - Quick Short Token Import\n"
+            "/popup S1-A1 - Force dismiss location mismatch popup\n"
             "/screen S1-A1 - Live page screenshot\n"
             "/refresh S1-A1 - Hard refresh & start sniper\n"
             "/trigger_buy - Wake up ALL accounts & check stock NOW\n"
@@ -184,7 +186,7 @@ class AccountController:
         await update.message.reply_text(f"✅ RAM cleaned & {healed} slots refreshed! All snipers running.")
 
     # =========================================================
-    # SHORT TOKEN COOKIE IMPORT HANDLER
+    # SHORT TOKEN & MANUAL POPUP HANDLERS
     # =========================================================
 
     async def handle_cookie_import(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -237,18 +239,44 @@ class AccountController:
         except Exception as exc:
             await update.message.reply_text(f"❌ Short token import failed: {exc}")
 
+    async def handle_force_popup(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        try:
+            if not context.args:
+                return await update.message.reply_text("❌ Format:\n/popup S1-A1")
+            slot_id = context.args[0].upper()
+            
+            page = await self.browser.get_page(slot_id)
+            if not page.url or page.url == "about:blank":
+                return await update.message.reply_text(f"❌ {slot_id} ka browser page active nahi hai.")
+
+            clicked = await page.evaluate('''() => {
+                let found = false;
+                const elements = document.querySelectorAll('button, div, span, a');
+                for (const el of elements) {
+                    const txt = el.innerText || el.textContent || "";
+                    if (txt.includes('No, stay on this site')) {
+                        el.click();
+                        found = true;
+                        break;
+                    }
+                }
+                return found;
+            ''')
+
+            if clicked:
+                await update.message.reply_text(f"✅ Successfully clicked 'No, stay on this site' for {slot_id}!")
+            else:
+                await update.message.reply_text(f"⚠️ Us slot par abhi koi location popup detect nahi hua.")
+        except Exception as exc:
+            await update.message.reply_text(f"❌ Popup handle failed: {exc}")
+
     # =========================================================
-    # LOCATION POPUP DESTROYER & LOGIN / OTP HELPER LOCATORS
+    # AUTO LOCATION POPUP DESTROYER
     # =========================================================
 
     async def _destroy_location_popup(self, page, slot_id: str = "SLOT"):
-        """
-        JavaScript DOM Injection ke zariye 'No, stay on this site' popup ko 
-        hamesha ke liye turant khatam karta hai!
-        """
         for _ in range(5):
             try:
-                # JavaScript se page ke andar dhoondh kar turant click marwa do
                 clicked = await page.evaluate('''() => {
                     let found = false;
                     const elements = document.querySelectorAll('button, div, span, a');
@@ -272,7 +300,6 @@ class AccountController:
             except Exception:
                 pass
 
-        # Agar galti se redirect ho gaya ho toh wapas product page par lao
         try:
             curr_url = (page.url or "").lower()
             if curr_url and "playstation" not in curr_url and "about:blank" not in curr_url:
@@ -281,8 +308,6 @@ class AccountController:
                 await asyncio.sleep(2.0)
         except Exception as e:
             log_step(slot_id, f"URL check note: {e}")
-
-
 
     async def _update_live_balance(self, page, account: AccountState) -> str:
         wallet_balance_text = "Balance info not found"
