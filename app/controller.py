@@ -44,6 +44,7 @@ class AccountController:
             slot_id = f"S{service_number}-A{account_number}"
             state = AccountState(slot_id=slot_id)
 
+            # Volume se saved session aur phone number auto-load karna
             try:
                 session_dir = self.browser.sessions.session_path(slot_id)
                 storage_file = session_dir / "storage_state.json"
@@ -59,6 +60,7 @@ class AccountController:
             self.accounts[slot_id] = state
 
     def _ensure_snipers_running(self) -> int:
+        """Jo bhi accounts logged in hain aur unka sniper band hai, unhe turant chalu karega."""
         started = 0
         for slot_id, acc in self.accounts.items():
             if acc.logged_in:
@@ -103,30 +105,32 @@ class AccountController:
         auto_started = self._ensure_snipers_running()
         extra_msg = f"\n🚀 Auto-resumed {auto_started} saved sessions!" if auto_started > 0 else ""
         await update.message.reply_text(
-            "🤖 Rooter Auto Buyer (Stable Pro Mode)\n\n"
+            "🤖 Rooter Auto Buyer (Swarm Pro Mode)\n\n"
             f"Total slots: {settings.total_slots}\n"
             f"Current Service ID: {settings.current_service_id}\n"
             f"Accounts/service: {settings.accounts_per_service}\n"
             f"{extra_msg}\n"
-            "System Online & Stable. Use /status to monitor."
+            "System Online & Swarm-Ready. Use /status to monitor."
         )
 
     async def handle_help(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text(
-            "📖 COMMANDS LIST\n\n"
-            "/status - Live status & balance\n"
+            "📖 SWARM PRO COMMANDS LIST\n\n"
+            "/status - Live status, balance & last check time\n"
             "/login S1-A1 9876543210 - Login account\n"
             "/otp S1-A1 123456 - Submit OTP\n"
-            "/screen S1-A1 - Live screenshot\n"
-            "/refresh S1-A1 - Hard refresh\n"
-            "/trigger_buy - Check stock now\n"
-            "/heal - Clean RAM & fresh tabs\n"
-            "/logout S1-A1 - Logout & clear session"
+            "/screen S1-A1 - Live page screenshot\n"
+            "/refresh S1-A1 - Hard refresh & start sniper\n"
+            "/trigger_buy - Wake up ALL accounts & check stock NOW\n"
+            "/sniper all - Start sniper on all logged-in slots\n"
+            "/stop_sniper all - Pause sniper without logging out\n"
+            "/heal - Clean RAM & restart browser tabs safely\n"
+            "/logout S1-A1 - Logout & delete saved session"
         )
 
     async def handle_status(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         self._ensure_snipers_running()
-        lines = ["📊 LIVE ACCOUNT STATUS", ""]
+        lines = ["📊 SWARM ACCOUNT STATUS", ""]
 
         for account in self.all_accounts():
             phone = account.phone_number if account.phone_number else "Saved Session"
@@ -149,7 +153,7 @@ class AccountController:
         await update.message.reply_text("\n".join(lines))
 
     async def handle_heal(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
-        await update.message.reply_text("🧹 Cleaning RAM and refreshing tabs...")
+        await update.message.reply_text("🧹 Healing browser & cleaning RAM for all active slots...")
         healed = 0
         for slot_id, acc in self.accounts.items():
             if acc.logged_in:
@@ -161,10 +165,10 @@ class AccountController:
                 except Exception:
                     pass
         self._ensure_snipers_running()
-        await update.message.reply_text(f"✅ RAM cleaned & {healed} slots refreshed!")
+        await update.message.reply_text(f"✅ RAM cleaned & {healed} slots refreshed! All snipers running.")
 
     # =========================================================
-    # LOGIN & OTP HELPERS
+    # LOGIN / OTP HELPER LOCATORS & BALANCE PARSER
     # =========================================================
 
     async def _update_live_balance(self, page, account: AccountState) -> str:
@@ -182,22 +186,17 @@ class AccountController:
 
     async def _find_mobile_input(self, page):
         selectors = [
-            'input[type="tel"]',
-            'input[inputmode="tel"]',
-            'input[name="phone"]',
-            'input[placeholder*="mobile" i]',
-            'input[placeholder*="number" i]',
-            'input[placeholder*="phone" i]'
+            'input[type="tel"]', 'input[inputmode="tel"]', 'input[name="phone"]',
+            'input[placeholder*="mobile" i]', 'input[placeholder*="number" i]'
         ]
         for selector in selectors:
             try:
                 locator = page.locator(selector)
-                count = await locator.count()
-                for index in range(count):
+                for index in range(await locator.count()):
                     item = locator.nth(index)
                     if await item.is_visible(timeout=300):
-                        ph = (await item.get_attribute("placeholder") or "").lower()
-                        if "search" in ph or "bgmi" in ph or "valorant" in ph or "coupon" in ph:
+                        ph = await item.get_attribute("placeholder")
+                        if ph and "search" in ph.lower():
                             continue
                         return item
             except Exception:
@@ -211,81 +210,56 @@ class AccountController:
             pass
         await asyncio.sleep(1.0)
 
-        # 1. Check karo agar login modal pehle se khula ho
         mobile_input = await self._find_mobile_input(page)
         if mobile_input is not None:
             return mobile_input
 
-        # 2. Advanced JavaScript DOM Scanner for Rightmost Profile Icon
         try:
-            clicked = await page.evaluate('''() => {
-                const header = document.querySelector('header') || document.body;
-                const elements = Array.from(header.querySelectorAll('svg, button, a, div[role="button"], img'));
-                
-                let profileEl = null;
-                let maxRight = -1;
-
-                for (const el of elements) {
-                    const rect = el.getBoundingClientRect();
-                    // Top-right header area filter (y < 80, x > window.innerWidth - 350)
-                    if (rect.top >= 0 && rect.top <= 80 && rect.left > window.innerWidth - 350) {
-                        if (rect.left > maxRight) {
-                            maxRight = rect.left;
-                            profileEl = el;
-                        }
+            await page.evaluate('''() => {
+                const header = document.querySelector('header');
+                if(header) {
+                    const elements = Array.from(header.querySelectorAll('svg, button, img, .mantine-Avatar-root'));
+                    if(elements.length > 0) {
+                        const profileIcon = elements[elements.length - 1];
+                        profileIcon.dispatchEvent(new MouseEvent('mousedown', { bubbles: true }));
+                        profileIcon.dispatchEvent(new MouseEvent('mouseup', { bubbles: true }));
+                        profileIcon.click();
                     }
                 }
-
-                if (profileEl) {
-                    const clickable = profileEl.closest('button') || profileEl.closest('a') || profileEl.parentElement || profileEl;
-                    if (clickable.tagName === 'A') {
-                        clickable.removeAttribute('href');
-                    }
-                    clickable.dispatchEvent(new MouseEvent('mousedown', { bubbles: true }));
-                    clickable.dispatchEvent(new MouseEvent('mouseup', { bubbles: true }));
-                    clickable.click();
-                    return true;
-                }
-                return false;
             }''')
-
             await asyncio.sleep(2.0)
             mobile_input = await self._find_mobile_input(page)
-            if mobile_input is not None:
+            if mobile_input:
                 return mobile_input
         except Exception:
             pass
 
-        # 3. Direct Coordinate Fallback (X: 1145, Y: 35)
-        try:
-            await page.mouse.click(1145, 35)
-            await asyncio.sleep(2.0)
-            mobile_input = await self._find_mobile_input(page)
-            if mobile_input is not None:
-                return mobile_input
-        except Exception:
-            pass
+        candidates = [page.get_by_text("Login / Sign Up", exact=True), page.get_by_text("Login", exact=True)]
+        for candidate in candidates:
+            try:
+                if await candidate.count() > 0 and await candidate.first.is_visible(timeout=300):
+                    await candidate.first.click(force=True, timeout=2000)
+                    await asyncio.sleep(1.5)
+                    mobile_input = await self._find_mobile_input(page)
+                    if mobile_input:
+                        return mobile_input
+            except Exception:
+                pass
 
         return None
 
-
     async def _find_send_otp_button(self, page):
         candidates = [
+            page.get_by_role("button", name="Continue", exact=False),
             page.locator("button:has-text('Continue')"),
             page.locator("button:has-text('CONTINUE')"),
-            page.locator("button:has-text('Send OTP')"),
-            page.locator("button:has-text('Get OTP')")
+            page.locator("text=Continue"),
+            page.locator("button:has-text('Send OTP')")
         ]
         for locator in candidates:
             try:
-                count = await locator.count()
-                for i in range(count):
-                    btn = locator.nth(i)
-                    txt = (await btn.inner_text(timeout=500) or "").strip().lower()
-                    if "yes, continue" in txt or "stay on this site" in txt:
-                        continue
-                    if await btn.is_visible(timeout=300):
-                        return btn
+                if await locator.count() > 0 and await locator.first.is_visible(timeout=300):
+                    return locator.first
             except Exception:
                 pass
         return None
@@ -296,9 +270,9 @@ class AccountController:
             'input[placeholder*="OTP" i]',
             'input[inputmode="numeric"]',
             'input[type="tel"]',
-            'input[type="number"]',
-            'input[type="text"]'
+            'input[type="number"]'
         ]
+
         found = []
         for selector in selectors:
             try:
@@ -307,25 +281,38 @@ class AccountController:
                 for index in range(count):
                     item = locator.nth(index)
                     if await item.is_visible(timeout=300):
-                        ph = (await item.get_attribute("placeholder") or "").lower()
-                        if "search" in ph or "bgmi" in ph or "mobile" in ph or "phone" in ph:
-                            continue
                         found.append(item)
                 if found:
                     return found
             except Exception:
                 continue
+
+        if not found:
+            try:
+                inputs = page.locator('input')
+                count = await inputs.count()
+                for i in range(count):
+                    el = inputs.nth(i)
+                    if await el.is_visible(timeout=200):
+                        type_attr = await el.get_attribute("type")
+                        if type_attr in ["tel", "number", "text"]:
+                            found.append(el)
+                if len(found) >= 6:
+                    return found[:8]
+            except Exception:
+                pass
+
         return found
 
     async def _find_verify_button(self, page):
         candidates = [
             page.locator("button:has-text('Verify')"),
-            page.locator("button:has-text('VERIFY')"),
-            page.locator("button:has-text('Submit')")
+            page.get_by_role("button", name="Verify Now", exact=False),
+            page.get_by_text("Verify", exact=False)
         ]
         for locator in candidates:
             try:
-                if await locator.count() > 0 and await locator.first.is_visible(timeout=500):
+                if await locator.count() > 0 and await locator.first.is_visible(timeout=300):
                     return locator.first
             except Exception:
                 pass
@@ -348,14 +335,15 @@ class AccountController:
             if not phone_number.isdigit() or len(phone_number) != 10:
                 return await update.message.reply_text("❌ Valid 10-digit mobile number daal bhai.")
 
-            old_task = self.sniper_tasks.pop(slot_id, None)
-            if old_task and not old_task.done():
-                old_task.cancel()
-
             await update.message.reply_text(f"🔍 Opening product page for {slot_id}...")
 
             page = await self.browser.open_product_page(slot_id)
-            await asyncio.sleep(1.5)
+
+            try:
+                await self.browser.handle_location_popup(page)
+                await asyncio.sleep(1.5)
+            except Exception:
+                pass
 
             account.update(phone_number=phone_number, active=True, current_page="🔐 Handling Login", last_error=None)
 
@@ -368,9 +356,7 @@ class AccountController:
                     screenshot_path.unlink()
                 raise RuntimeError("Login popup not opened.")
 
-            await mobile_input.click(force=True)
-            await asyncio.sleep(0.3)
-            await mobile_input.fill("")
+            await mobile_input.focus()
             await page.keyboard.type(phone_number, delay=50)
             await asyncio.sleep(1.0)
 
@@ -415,15 +401,15 @@ class AccountController:
             slot_id, otp = args[0].upper(), args[1].strip()
 
             account = self.get_account(slot_id)
-            if len(otp) not in [4, 6, 8] or not otp.isdigit():
-                return await update.message.reply_text("❌ OTP 4, 6 ya 8 digit ka number hona chahiye.")
+            if len(otp) not in [6, 8] or not otp.isdigit():
+                return await update.message.reply_text("❌ OTP 6 ya 8 digit ka number hona chahiye.")
 
             page = await self.browser.get_page(slot_id)
 
             otp_inputs = []
             for _ in range(20):
                 otp_inputs = await self._find_otp_inputs(page)
-                if otp_inputs:
+                if otp_inputs and (len(otp_inputs) == 1 or len(otp_inputs) >= len(otp)):
                     break
                 await asyncio.sleep(0.5)
 
@@ -444,10 +430,11 @@ class AccountController:
             await asyncio.sleep(1.0)
 
             verify_button = await self._find_verify_button(page)
-            if verify_button is not None:
-                await verify_button.evaluate("(el) => { el.removeAttribute('disabled'); el.removeAttribute('data-disabled'); el.disabled = false; }")
-                await verify_button.click(force=True, timeout=3000)
+            if verify_button is None:
+                raise RuntimeError("Verify button nahi mila.")
 
+            await verify_button.evaluate("(el) => { el.removeAttribute('disabled'); el.removeAttribute('data-disabled'); el.disabled = false; }")
+            await verify_button.click(force=True, timeout=3000)
             await asyncio.sleep(3.5)
 
             page = await self.browser.ensure_product_page(slot_id)
@@ -474,7 +461,7 @@ class AccountController:
             slot_id = context.args[0].upper()
             account = self.get_account(slot_id)
 
-            page = await self.browser.get_page(slot_id)
+            page = await self.browser.ensure_product_page(slot_id)
             screenshot_path = self.screenshots_dir / f"{slot_id}.png"
             await page.screenshot(path=str(screenshot_path), full_page=False)
             await self.telegram.send_photo(photo_path=str(screenshot_path), caption=f"🖥 {slot_id}\nState: {account.current_page}")
@@ -521,13 +508,18 @@ class AccountController:
             slot_id = context.args[0].upper()
             account = self.get_account(slot_id)
 
+            # 1. Sniper task ko rokna
             task = self.sniper_tasks.pop(slot_id, None)
             if task and not task.done():
                 task.cancel()
 
+            # 2. Browser RAM se tab/context permanently close karna
             await self.browser.close_slot(slot_id)
-            self.browser.sessions.delete_session(slot_id)
 
+            # 3. Volume se session data aur files delete karna
+            self.browser.sessions.delete_session(slot_id)
+            
+            # Extra: Meta file (phone number) bhi delete karna agar ho toh
             try:
                 session_dir = self.browser.sessions.session_path(slot_id)
                 meta_file = session_dir / "meta.json"
@@ -536,6 +528,7 @@ class AccountController:
             except Exception:
                 pass
 
+            # State ko fresh reset karna
             account.update(
                 phone_number=None,
                 logged_in=False,
@@ -545,16 +538,18 @@ class AccountController:
                 wallet_balance=None
             )
             
-            await update.message.reply_text(f"🚪 Successfully logged out & RAM freed for {slot_id}!")
+            await update.message.reply_text(f"🚪 Successfully logged out & RAM freed for {slot_id}. Slot is now fresh for a new account!")
         except Exception as exc:
             await update.message.reply_text(f"❌ Logout failed: {exc}")
 
+
     # =========================================================
-    # 🎯 SWARM ATTACK SNIPER WORKER
+    # 🎯 SWARM ATTACK SNIPER BACKGROUND WORKER (SELF-HEALING)
     # =========================================================
     async def _sniper_worker(self, slot_id: str):
         account = self.get_account(slot_id)
 
+        # Smart Stagger: Har slot ko 4-4 second ke gap par start karega taaki ek sath CPU spike na ho
         try:
             slot_num = int(slot_id.split("-A")[-1])
             await asyncio.sleep((slot_num - 1) * 4)
@@ -575,6 +570,7 @@ class AccountController:
                     except Exception:
                         pass
 
+                # 1. 30-SECOND WAIT PHASE (OR SWARM TRIGGERED)
                 last_time = datetime.now().strftime("%I:%M:%S %p")
                 account.update(current_page=f"⏳ [STAGE: 30s Wait] (Last: {last_time})", last_error=None)
 
@@ -589,6 +585,7 @@ class AccountController:
 
                 page = await self.browser.get_page(slot_id)
 
+                # 2. ANTI-CACHE HARD REFRESH
                 account.update(current_page="🔄 [STAGE: Hard Refreshing Page]")
                 cache_buster = int(time.time())
                 fresh_url = f"{settings.product_url}?cb={cache_buster}" if "?" not in settings.product_url else f"{settings.product_url}&cb={cache_buster}"
@@ -606,6 +603,7 @@ class AccountController:
                     await asyncio.sleep(4.0)
                     continue
 
+                # 3. AGGRESSIVE 5000 SELECTION
                 account.update(current_page="🎯 [STAGE: Selecting Rs.5000]")
                 rs_5000_locator = page.locator("text=Rs.5000 Wallet Code >> visible=true")
 
@@ -629,6 +627,7 @@ class AccountController:
                 await asyncio.sleep(1.5)
                 await self._update_live_balance(page, account)
 
+                # 4. STOCK CHECK RADAR
                 account.update(current_page="🔍 [STAGE: Checking for Pay Button]")
                 pay_btn_1 = page.locator("button >> text='Pay via wallet' >> visible=true").first
                 is_in_stock = False
@@ -648,8 +647,10 @@ class AccountController:
                 # ==========================================
                 account.update(current_page="🚨 [STAGE: INITIATING SWARM BUY FLOW!]")
                 
+                # 🔥 Yahan baki saare accounts ki neend todne ke liye trigger bhej diya
                 if not self.stock_event.is_set():
                     self.stock_event.set()
+                    # 3 second baad event clear ho jayega taaki loop normal chale
                     asyncio.create_task(self._clear_stock_event_delayed())
 
                 await self.telegram.send_message(f"🚨 STOCK DETECTED in {slot_id}! Swarm attack initiated across all accounts...")
