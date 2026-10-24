@@ -204,44 +204,97 @@ class AccountController:
         return None
 
     async def _open_login_popup(self, page):
+        # 1. Location popup ("No, stay on this site") ko handle karna aur page ko upar rakhna
         try:
             await self.browser.handle_location_popup(page)
+            await page.evaluate("window.scrollTo(0, 0)")
         except Exception:
             pass
         await asyncio.sleep(1.0)
 
+        # Agar mobile input pehle se khula hai
         mobile_input = await self._find_mobile_input(page)
         if mobile_input is not None:
             return mobile_input
 
+        # 2. ORIGINAL PRE-DUSSEHRA METHOD:
+        # Playwright Native Locators se Top-Right Profile Icon (SVG / Avatar / Button) ko dhoondh kar real click karna
         try:
-            await page.evaluate('''() => {
-                const header = document.querySelector('header');
-                if(header) {
-                    const elements = Array.from(header.querySelectorAll('svg, button, img, .mantine-Avatar-root'));
-                    if(elements.length > 0) {
-                        const profileIcon = elements[elements.length - 1];
-                        profileIcon.dispatchEvent(new MouseEvent('mousedown', { bubbles: true }));
-                        profileIcon.dispatchEvent(new MouseEvent('mouseup', { bubbles: true }));
-                        profileIcon.click();
-                    }
-                }
-            }''')
-            await asyncio.sleep(2.0)
-            mobile_input = await self._find_mobile_input(page)
-            if mobile_input:
-                return mobile_input
+            svgs = page.locator("svg:visible")
+            count = await svgs.count()
+            top_right_svgs = []
+
+            for i in range(count):
+                el = svgs.nth(i)
+                box = await el.bounding_box()
+                # Top navbar mein right side (y < 80, x > 900) wale icons collect karo
+                if box and 0 <= box["y"] <= 80 and box["x"] >= 900:
+                    top_right_svgs.append((box["x"], el))
+
+            if top_right_svgs:
+                # Sabse right-side wala icon Profile Icon hota hai
+                top_right_svgs.sort(key=lambda item: item[0], reverse=True)
+                profile_svg = top_right_svgs[0][1]
+
+                # Pehle uske clickable parent container par Playwright ka real click maro
+                try:
+                    parent = profile_svg.locator("xpath=..")
+                    await parent.click(force=True, timeout=2000)
+                except Exception:
+                    pass
+
+                await asyncio.sleep(1.0)
+                mobile_input = await self._find_mobile_input(page)
+                if mobile_input is not None:
+                    return mobile_input
+
+                # Agar parent click se nahi khula toh direct SVG locator par real Playwright click maro
+                try:
+                    await profile_svg.click(force=True, timeout=2000)
+                except Exception:
+                    pass
+
+                await asyncio.sleep(1.5)
+                mobile_input = await self._find_mobile_input(page)
+                if mobile_input is not None:
+                    return mobile_input
         except Exception:
             pass
 
-        candidates = [page.get_by_text("Login / Sign Up", exact=True), page.get_by_text("Login", exact=True)]
+        # 3. Mantine Avatar / ActionIcon / Header Button Locators (Pre-Dussehra Backup)
+        avatar_selectors = [
+            ".mantine-Avatar-root",
+            ".mantine-ActionIcon-root",
+            "header button",
+            "header svg",
+            "nav button",
+            "nav svg",
+        ]
+        for sel in avatar_selectors:
+            try:
+                loc = page.locator(f"{sel} >> visible=true")
+                if await loc.count() > 0:
+                    await loc.last.click(force=True, timeout=2000)
+                    await asyncio.sleep(1.5)
+                    mobile_input = await self._find_mobile_input(page)
+                    if mobile_input is not None:
+                        return mobile_input
+            except Exception:
+                pass
+
+        # 4. Text-based Login / Sign Up buttons (Original Fallback)
+        candidates = [
+            page.get_by_text("Login / Sign Up", exact=True),
+            page.get_by_text("Login", exact=True),
+            page.get_by_role("button", name="Login", exact=False),
+        ]
         for candidate in candidates:
             try:
                 if await candidate.count() > 0 and await candidate.first.is_visible(timeout=300):
                     await candidate.first.click(force=True, timeout=2000)
                     await asyncio.sleep(1.5)
                     mobile_input = await self._find_mobile_input(page)
-                    if mobile_input:
+                    if mobile_input is not None:
                         return mobile_input
             except Exception:
                 pass
