@@ -210,63 +210,14 @@ class AccountController:
             pass
         await asyncio.sleep(1.0)
 
-        # Agar pehle se hi khula ho
+        # 1. Pehle check kar lo ki popup already toh nahi khula
         mobile_input = await self._find_mobile_input(page)
         if mobile_input is not None:
             return mobile_input
 
-        # Strategy 1: Text-based direct click
-        candidates = [
-            page.get_by_text("Login / Sign Up", exact=True),
-            page.get_by_text("Login", exact=True),
-            page.locator("button:has-text('Login')")
-        ]
-        for candidate in candidates:
-            try:
-                if await candidate.count() > 0 and await candidate.first.is_visible(timeout=500):
-                    await candidate.first.click(force=True)
-                    await asyncio.sleep(1.5)
-                    inp = await self._find_mobile_input(page)
-                    if inp: return inp
-            except Exception:
-                pass
-
-        # Strategy 2: Smart SVG Detector (Top-Right Icon)
+        # 2. Exact Profile Icon Coordinate Click
         try:
-            await page.evaluate('''() => {
-                const svgs = Array.from(document.querySelectorAll('svg'));
-                let profileSvg = null;
-                let maxX = -1;
-                
-                // Sirf top-right corner ke icons ko filter karega
-                for(let svg of svgs) {
-                    const rect = svg.getBoundingClientRect();
-                    if(rect.top < 100 && rect.left > window.innerWidth - 200) {
-                        if(rect.left > maxX) {
-                            maxX = rect.left;
-                            profileSvg = svg; // Sabse right wala icon (Profile)
-                        }
-                    }
-                }
-                
-                if(profileSvg) {
-                    const target = profileSvg.closest('button') || profileSvg.parentElement || profileSvg;
-                    target.dispatchEvent(new MouseEvent('mousedown', { bubbles: true }));
-                    target.dispatchEvent(new MouseEvent('mouseup', { bubbles: true }));
-                    target.click();
-                }
-            }''')
-            await asyncio.sleep(2.0)
-            mobile_input = await self._find_mobile_input(page)
-            if mobile_input:
-                return mobile_input
-        except Exception:
-            pass
-
-        # Strategy 3: Bruteforce Coordinate Click (Exact Top-Right Corner)
-        try:
-            # Window 1200x675 hai, 1150, 35 exact profile icon ki jagah hai
-            await page.mouse.click(1150, 35)
+            await page.mouse.click(1165, 42)
             await asyncio.sleep(2.0)
             mobile_input = await self._find_mobile_input(page)
             if mobile_input:
@@ -275,6 +226,7 @@ class AccountController:
             pass
 
         return None
+
 
     async def _find_send_otp_button(self, page):
         candidates = [
