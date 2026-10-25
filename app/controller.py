@@ -3,6 +3,7 @@ import json
 import re
 import sys
 import time
+import urllib.parse
 from datetime import datetime
 from pathlib import Path
 from typing import Dict
@@ -66,9 +67,9 @@ class AccountController:
                     saved_phone = self.browser.load_saved_phone(slot_id)
                     state.logged_in = True
                     state.active = True
-                    state.phone_number = saved_phone
+                    state.phone_number = saved_phone or "Saved Session"
                     state.current_page = "✅ Session Restored (Auto-Starting...)"
-                    log_step(slot_id, f"Restored saved session (Phone: {saved_phone})")
+                    log_step(slot_id, f"Restored saved session (ID: {state.phone_number})")
             except Exception as e:
                 log_step(slot_id, f"Session restore note: {e}")
 
@@ -133,13 +134,13 @@ class AccountController:
         await update.message.reply_text(
             "📖 SWARM PRO COMMANDS LIST\n\n"
             "/status - Live status, balance & last check time\n"
-            "/login S1-A1 9876543210 - Login account\n"
+            "/login S1-A1 9876543210 - Human Login with Phone\n"
             "/otp S1-A1 123456 - Submit OTP\n"
-            "/cookie S1-A1 <token> - Quick Short Token Import\n"
-            "/popup S1-A1 - Vaporize location popup from DOM\n"
+            "/cookie S1-A1 <token> - Instant Token Login (Auto-Reloads Browser)\n"
+            "/popup S1-A1 - Force click 'No, stay on this site'\n"
             "/screen S1-A1 - Live page screenshot\n"
             "/refresh S1-A1 - Hard refresh & start sniper\n"
-            "/trigger_buy - Wake up ALL accounts & check stock NOW\n"
+            "/trigger_buy - Wake up ALL accounts & attack stock NOW\n"
             "/sniper all - Start sniper on all logged-in slots\n"
             "/stop_sniper all - Pause sniper without logging out\n"
             "/heal - Clean RAM & restart browser tabs safely\n"
@@ -159,7 +160,7 @@ class AccountController:
 
             lines.append(f"🆔 {account.slot_id} | {login_state} | {sniper_state}")
             if account.logged_in:
-                lines.append(f"  📱 Num: {phone} | Bal: {balance}")
+                lines.append(f"  📱 ID/Num: {phone} | Bal: {balance}")
 
             lines.append(f"  📍 State: {account.current_page}")
 
@@ -186,128 +187,205 @@ class AccountController:
         await update.message.reply_text(f"✅ RAM cleaned & {healed} slots refreshed! All snipers running.")
 
     # =========================================================
-    # SHORT TOKEN & DOM VAPORIZER POPUP HANDLERS
+    # INSTANT COOKIE / SHORT TOKEN IMPORT (WITH LIVE RELOAD)
     # =========================================================
+
+    def _normalize_cookie_for_playwright(self, c: dict) -> dict:
+        exp = c.get("expirationDate") or c.get("expires") or 1893456000
+        same_site_raw = str(c.get("sameSite") or "Lax").lower()
+        if "strict" in same_site_raw:
+            same_site = "Strict"
+        elif "none" in same_site_raw or "no_restriction" in same_site_raw:
+            same_site = "None"
+        else:
+            same_site = "Lax"
+
+        return {
+            "name": str(c["name"]),
+            "value": str(c["value"]),
+            "domain": str(c.get("domain", ".rooter.gg")),
+            "path": str(c.get("path", "/")),
+            "expires": float(exp),
+            "httpOnly": bool(c.get("httpOnly", False)),
+            "secure": bool(c.get("secure", True if same_site == "None" else False)),
+            "sameSite": same_site,
+        }
 
     async def handle_cookie_import(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         try:
-            if not context.args or len(context.args) < 2:
-                return await update.message.reply_text("❌ Format:\n/cookie S1-A1 <user_auth_token_value>")
-            
-            slot_id = context.args[0].upper()
-            token_value = context.args[1].strip()
-            
+            slot_id = ""
+            raw_input = ""
+
+            # Case 1: Uploaded .json file
+            if update.message and update.message.document:
+                if context.args:
+                    slot_id = context.args[0].upper()
+                elif update.message.caption:
+                    for part in update.message.caption.upper().split():
+                        if "-A" in part:
+                            slot_id = part
+                            break
+                if not slot_id:
+                    return await update.message.reply_text("❌ Caption mein `/cookie S1-A1` likh kar file bhej bhai!")
+
+                tg_file = await context.bot.get_file(update.message.document.file_id)
+                file_bytes = await tg_file.download_as_bytearray()
+                raw_input = file_bytes.decode("utf-8").strip()
+            else:
+                # Case 2: Text command (/cookie S1-A1 <token_or_json>)
+                if not context.args or len(context.args) < 2:
+                    return await update.message.reply_text(
+                        "❌ Format:\n`/cookie S1-A1 <user_auth_value>`\n"
+                        "Ya fir `.json` file attach karke caption mein `/cookie S1-A1` likh!"
+                    )
+                slot_id = context.args[0].upper()
+                raw_input = " ".join(context.args[1:]).strip()
+
             account = self.get_account(slot_id)
-            
-            minimal_cookies = [
-                {
-                    "domain": ".rooter.gg",
-                    "expirationDate": 1824388078,
-                    "hostOnly": False,
-                    "httpOnly": False,
-                    "name": "user_auth",
-                    "path": "/",
-                    "sameSite": "Lax",
-                    "secure": True,
-                    "session": False,
-                    "value": token_value
-                },
-                {
-                    "domain": ".rooter.gg",
-                    "expirationDate": 1824388078,
-                    "hostOnly": False,
-                    "httpOnly": False,
-                    "name": "client_id",
-                    "path": "/",
-                    "sameSite": "Lax",
-                    "secure": True,
-                    "session": False,
-                    "value": "08c76d30-cf1b-11f1-bb91-a7a0572fd2db"
-                }
-            ]
-            
+            await update.message.reply_text(f"⏳ Injecting session & Indian region cookies into {slot_id}...")
+
+            # Pause existing sniper while resetting context
+            old_task = self.sniper_tasks.pop(slot_id, None)
+            if old_task and not old_task.done():
+                old_task.cancel()
+
+            exp = 1893456000
+            playwright_cookies = list(self.browser.get_indian_region_cookies())
+            user_label = "Token-Auth"
+
+            # Check if full JSON array or short user_auth token
+            if raw_input.startswith("["):
+                parsed_list = json.loads(raw_input)
+                for item in parsed_list:
+                    if isinstance(item, dict) and "name" in item and "value" in item:
+                        playwright_cookies.append(self._normalize_cookie_for_playwright(item))
+                        if item["name"] == "user_auth":
+                            try:
+                                dec = urllib.parse.unquote(item["value"])
+                                uid = json.loads(dec).get("userId")
+                                if uid:
+                                    user_label = f"UID:{uid}"
+                            except Exception:
+                                pass
+            else:
+                token_value = raw_input.strip().strip('"').strip("'")
+                # Agar user ne decoded JSON diya ho toh URL-encode kar do
+                if token_value.startswith("{"):
+                    try:
+                        uid = json.loads(token_value).get("userId")
+                        if uid:
+                            user_label = f"UID:{uid}"
+                    except Exception:
+                        pass
+                    token_value = urllib.parse.quote(token_value, safe="")
+                else:
+                    try:
+                        dec = urllib.parse.unquote(token_value)
+                        uid = json.loads(dec).get("userId")
+                        if uid:
+                            user_label = f"UID:{uid}"
+                    except Exception:
+                        pass
+
+                playwright_cookies.extend([
+                    {
+                        "name": "user_auth",
+                        "value": token_value,
+                        "domain": ".rooter.gg",
+                        "path": "/",
+                        "expires": exp,
+                        "httpOnly": False,
+                        "secure": True,
+                        "sameSite": "Lax",
+                    },
+                    {
+                        "name": "client_id",
+                        "value": "08c76d30-cf1b-11f1-bb91-a7a0572fd2db",
+                        "domain": ".rooter.gg",
+                        "path": "/",
+                        "expires": exp,
+                        "httpOnly": False,
+                        "secure": True,
+                        "sameSite": "Lax",
+                    },
+                ])
+
+            # 1. Purana browser context band karo taaki naya storage_state 100% load ho
+            await self.browser.close_slot(slot_id)
+
+            # 2. Disk par storage_state.json write karo
             session_dir = self.browser.sessions.session_path(slot_id)
             session_dir.mkdir(parents=True, exist_ok=True)
             storage_file = session_dir / "storage_state.json"
-            
-            playwright_state = {"cookies": minimal_cookies, "origins": []}
-            storage_file.write_text(json.dumps(playwright_state))
-            
-            account.update(logged_in=True, active=True, current_page="✅ Short Token Imported", last_error=None)
-            log_step(slot_id, "Short token imported successfully via Telegram command.")
-            await update.message.reply_text(f"✅ Success! Short token set for {slot_id}.\nAb `/refresh {slot_id}` bhej kar check kar le!")
+            storage_file.write_text(json.dumps({"cookies": playwright_cookies, "origins": []}))
+
+            # 3. Naya context open karke product page load karo aur session save karo
+            page = await self.browser.open_product_page(slot_id)
+            await self._destroy_location_popup(page, slot_id)
+            balance_txt = await self._update_live_balance(page, account)
+            await self.browser.save_session(slot_id, user_label)
+
+            account.update(
+                phone_number=user_label,
+                logged_in=True,
+                active=True,
+                current_page="✅ Token Active & Verified",
+                last_error=None,
+            )
+            log_step(slot_id, f"Cookie session live-loaded ({user_label}) | {balance_txt}")
+
+            # 4. Auto-start Sniper
+            self.sniper_tasks[slot_id] = asyncio.create_task(self._sniper_worker(slot_id))
+
+            await update.message.reply_text(
+                f"✅ Success! {slot_id} Live Logged-In ({user_label})!\n"
+                f"💰 Wallet: {balance_txt}\n"
+                f"🔫 Swarm Sniper Auto-Started! Ab `/screen {slot_id}` bhej kar dekh le!"
+            )
         except Exception as exc:
-            await update.message.reply_text(f"❌ Short token import failed: {exc}")
+            log_step("COOKIE_ERR", f"Failed: {exc}")
+            await update.message.reply_text(f"❌ Cookie import failed: {exc}")
+
+    # =========================================================
+    # MANUAL & AUTO LOCATION POPUP HANDLER
+    # =========================================================
 
     async def handle_force_popup(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         try:
             if not context.args:
                 return await update.message.reply_text("❌ Format:\n/popup S1-A1")
             slot_id = context.args[0].upper()
-            
+
             page = await self.browser.get_page(slot_id)
             if not page.url or page.url == "about:blank":
                 return await update.message.reply_text(f"❌ {slot_id} ka browser page active nahi hai.")
 
-            # Nuclear Option: Vaporize popup from DOM instantly
-            removed = await page.evaluate('''() => {
-                let found = false;
-                const elements = document.querySelectorAll('div, section');
-                for (const el of elements) {
-                    if (el.innerText && el.innerText.includes('Different Location Detected')) {
-                        const modal = el.closest('div[role="dialog"]') || el.closest('.fixed') || el.closest('.absolute') || el;
-                        if (modal) {
-                            modal.remove();
-                            found = true;
-                        }
-                    }
-                }
-                return found;
-            ''')
+            await self._destroy_location_popup(page, slot_id)
+            await self.browser.save_session(slot_id, self.get_account(slot_id).phone_number)
 
-            if removed:
-                await update.message.reply_text(f"✅ Location popup successfully vaporized from DOM for {slot_id}!")
-            else:
-                await update.message.reply_text(f"⚠️ Us slot par abhi koi popup detect nahi hua.")
+            await update.message.reply_text(
+                f"✅ 'No, stay on this site' clicked & Indian region locked for {slot_id}!\n"
+                f"Ab `/screen {slot_id}` check kar."
+            )
         except Exception as exc:
-            await update.message.reply_text(f"❌ Popup remove failed: {exc}")
-
-    # =========================================================
-    # AUTO LOCATION POPUP VAPORIZER
-    # =========================================================
+            await update.message.reply_text(f"❌ Force popup failed: {exc}")
 
     async def _destroy_location_popup(self, page, slot_id: str = "SLOT"):
-        for _ in range(4):
-            try:
-                removed = await page.evaluate('''() => {
-                    let found = false;
-                    const elements = document.querySelectorAll('div, section');
-                    for (const el of elements) {
-                        if (el.innerText && el.innerText.includes('Different Location Detected')) {
-                            const modal = el.closest('div[role="dialog"]') || el.closest('.fixed') || el.closest('.absolute') || el;
-                            if (modal) {
-                                modal.remove();
-                                found = true;
-                            }
-                        }
-                    }
-                    return found;
-                ''')
-                
-                if removed:
-                    log_step(slot_id, "Permanently vaporized location popup from DOM!")
-                    await asyncio.sleep(0.5)
-                    break
-                await asyncio.sleep(0.4)
-            except Exception:
-                pass
+        """
+        Real Human Click + Indian Cookie Lock taaki popup click hokar hamesha ke liye band ho.
+        """
+        try:
+            await self.browser.handle_location_popup(page, slot_id)
+        except Exception:
+            pass
 
         try:
             curr_url = (page.url or "").lower()
             if curr_url and "playstation" not in curr_url and "about:blank" not in curr_url:
-                log_step(slot_id, f"Page redirected to {curr_url}! Returning to PlayStation product page...")
+                log_step(slot_id, f"Redirected to {curr_url}! Returning to PlayStation product page...")
                 await page.goto(settings.product_url, wait_until="domcontentloaded", timeout=35000)
-                await asyncio.sleep(2.0)
+                await asyncio.sleep(1.2)
+                await self.browser.handle_location_popup(page, slot_id)
         except Exception as e:
             log_step(slot_id, f"URL check note: {e}")
 
@@ -323,6 +401,10 @@ class AccountController:
         except Exception:
             pass
         return wallet_balance_text
+
+    # =========================================================
+    # HUMAN LOGIN & OTP HELPERS
+    # =========================================================
 
     async def _find_mobile_input(self, page):
         selectors = [
@@ -353,19 +435,19 @@ class AccountController:
 
     async def _open_login_popup(self, page, slot_id: str = "SLOT"):
         await self._destroy_location_popup(page, slot_id)
-        await asyncio.sleep(0.8)
+        await asyncio.sleep(0.6)
 
         mobile_input = await self._find_mobile_input(page)
         if mobile_input is not None:
             return mobile_input
 
         try:
-            icon_info = await page.evaluate('''() => {
-                const svgs = Array.from(document.querySelectorAll('svg'));
+            icon_info = await page.evaluate("""() => {
+                const svgs = Array.from(document.querySelectorAll('svg, button, a'));
                 const topRight = [];
-                for (const svg of svgs) {
-                    const r = svg.getBoundingClientRect();
-                    if (r.top >= 5 && r.top <= 75 && r.left > 850 && r.width >= 12 && r.width <= 65) {
+                for (const el of svgs) {
+                    const r = el.getBoundingClientRect();
+                    if (r.top >= 5 && r.top <= 80 && r.left > 900 && r.width >= 12 && r.width <= 70) {
                         topRight.push({
                             x: r.left + r.width / 2,
                             y: r.top + r.height / 2,
@@ -376,29 +458,33 @@ class AccountController:
                 if (topRight.length === 0) return null;
                 topRight.sort((a, b) => b.left - a.left);
                 return topRight[0];
-            ''')
+            }""")
 
             if icon_info and "x" in icon_info and "y" in icon_info:
                 px, py = icon_info["x"], icon_info["y"]
+                await page.mouse.move(px, py, steps=6)
                 await page.mouse.click(px, py)
-                await asyncio.sleep(2.0)
+                await asyncio.sleep(1.8)
                 mobile_input = await self._find_mobile_input(page)
                 if mobile_input is not None:
                     return mobile_input
         except Exception:
             pass
 
-        try:
-            await page.mouse.click(1145, 35)
-            await asyncio.sleep(2.0)
-            mobile_input = await self._find_mobile_input(page)
-            if mobile_input is not None:
-                return mobile_input
-        except Exception:
-            pass
+        # Fallback coordinates for 1280x720 top-right profile icon
+        for coord_x in [1208, 1145, 1225]:
+            try:
+                await page.mouse.move(coord_x, 36, steps=5)
+                await page.mouse.click(coord_x, 36)
+                await asyncio.sleep(1.5)
+                mobile_input = await self._find_mobile_input(page)
+                if mobile_input is not None:
+                    return mobile_input
+            except Exception:
+                pass
 
         candidates = [
-            page.get_by_text("Login / Sign Up", exact=True),
+            page.get_by_text("Login / Sign Up", exact=False),
             page.get_by_text("Login", exact=True),
         ]
         for candidate in candidates:
@@ -494,13 +580,15 @@ class AccountController:
         slot_id = "UNKNOWN"
         try:
             args = context.args
-            if len(args) < 2:
+            if not args or len(args) < 2:
                 return await update.message.reply_text("❌ Format:\n/login S1-A1 9876543210")
             slot_id, phone_number = args[0].upper(), args[1].strip()
 
             account = self.get_account(slot_id)
             if account.logged_in:
-                return await update.message.reply_text(f"⚠️ {slot_id} pehle se logged in hai. Logout ke liye /logout {slot_id} karein.")
+                return await update.message.reply_text(
+                    f"⚠️ {slot_id} pehle se logged in hai. Naya login karne ke liye pehle `/logout {slot_id}` bhej."
+                )
             if not phone_number.isdigit() or len(phone_number) != 10:
                 return await update.message.reply_text("❌ Valid 10-digit mobile number daal bhai.")
 
@@ -508,11 +596,11 @@ class AccountController:
             if old_task and not old_task.done():
                 old_task.cancel()
 
-            log_step(slot_id, f"Starting login flow for phone {phone_number}...")
-            await update.message.reply_text(f"🔍 Opening product page for {slot_id}...")
+            log_step(slot_id, f"Starting human login flow for phone {phone_number}...")
+            await update.message.reply_text(f"🔍 Opening product page for {slot_id} (Stealth Mode)...")
 
             page = await self.browser.open_product_page(slot_id)
-            await asyncio.sleep(2.0)
+            await asyncio.sleep(1.5)
             await self._destroy_location_popup(page, slot_id)
 
             account.update(phone_number=phone_number, active=True, current_page="🔐 Opening Login Popup", last_error=None)
@@ -530,8 +618,8 @@ class AccountController:
             await mobile_input.click(force=True)
             await asyncio.sleep(0.3)
             await mobile_input.fill("")
-            await page.keyboard.type(phone_number, delay=55)
-            await asyncio.sleep(1.0)
+            await page.keyboard.type(phone_number, delay=65)
+            await asyncio.sleep(0.8)
 
             send_otp_button = await self._find_send_otp_button(page)
             if send_otp_button is None:
@@ -543,7 +631,9 @@ class AccountController:
                     error_ss.unlink()
                 raise RuntimeError("Continue button not found.")
 
-            await send_otp_button.evaluate("(el) => { el.removeAttribute('disabled'); el.removeAttribute('data-disabled'); el.disabled = false; }")
+            await send_otp_button.evaluate(
+                "(el) => { el.removeAttribute('disabled'); el.removeAttribute('data-disabled'); el.disabled = false; }"
+            )
             await send_otp_button.click(force=True, timeout=3000)
 
             otp_ready = False
@@ -578,7 +668,7 @@ class AccountController:
         slot_id = "UNKNOWN"
         try:
             args = context.args
-            if len(args) < 2:
+            if not args or len(args) < 2:
                 return await update.message.reply_text("❌ Format:\n/otp S1-A1 123456")
             slot_id, otp = args[0].upper(), args[1].strip()
 
@@ -600,26 +690,29 @@ class AccountController:
 
             if len(otp_inputs) == 1:
                 await otp_inputs[0].focus()
-                await page.keyboard.type(otp, delay=50)
+                await page.keyboard.type(otp, delay=60)
             else:
-                boxes = otp_inputs[:len(otp)]
+                boxes = otp_inputs[: len(otp)]
                 for i, digit in enumerate(otp):
                     if i < len(boxes):
                         await boxes[i].focus()
                         await page.keyboard.press(digit)
-                        await asyncio.sleep(0.05)
+                        await asyncio.sleep(0.06)
 
-            await asyncio.sleep(1.0)
+            await asyncio.sleep(0.8)
 
             verify_button = await self._find_verify_button(page)
             if verify_button is None:
                 raise RuntimeError("Verify button nahi mila.")
 
-            await verify_button.evaluate("(el) => { el.removeAttribute('disabled'); el.removeAttribute('data-disabled'); el.disabled = false; }")
+            await verify_button.evaluate(
+                "(el) => { el.removeAttribute('disabled'); el.removeAttribute('data-disabled'); el.disabled = false; }"
+            )
             await verify_button.click(force=True, timeout=3000)
             await asyncio.sleep(3.5)
 
             page = await self.browser.ensure_product_page(slot_id)
+            await self._destroy_location_popup(page, slot_id)
             await self.browser.save_session(slot_id, account.phone_number)
             account.update(logged_in=True, active=True, current_page="✅ Logged In & Saved", last_error=None)
             log_step(slot_id, "Login successful & session saved!")
@@ -648,12 +741,16 @@ class AccountController:
             page = await self.browser.get_page(slot_id)
             if not page.url or page.url == "about:blank":
                 page = await self.browser.open_product_page(slot_id)
-                await asyncio.sleep(1.5)
-                await self._destroy_location_popup(page, slot_id)
+                await asyncio.sleep(1.0)
+
+            await self._destroy_location_popup(page, slot_id)
 
             screenshot_path = self.screenshots_dir / f"{slot_id}.png"
             await page.screenshot(path=str(screenshot_path), full_page=False)
-            await self.telegram.send_photo(photo_path=str(screenshot_path), caption=f"🖥 {slot_id}\nState: {account.current_page}")
+            await self.telegram.send_photo(
+                photo_path=str(screenshot_path),
+                caption=f"🖥 {slot_id}\nState: {account.current_page}",
+            )
             if screenshot_path.exists():
                 screenshot_path.unlink()
         except Exception as exc:
@@ -672,13 +769,18 @@ class AccountController:
 
             page = await self.browser.reset_slot_page(slot_id)
             cb = int(time.time())
-            fresh_url = f"{settings.product_url}?cb={cb}" if "?" not in settings.product_url else f"{settings.product_url}&cb={cb}"
+            fresh_url = (
+                f"{settings.product_url}?cb={cb}"
+                if "?" not in settings.product_url
+                else f"{settings.product_url}&cb={cb}"
+            )
             await page.goto(fresh_url, wait_until="domcontentloaded", timeout=45000)
-            await asyncio.sleep(1.5)
+            await asyncio.sleep(1.2)
             await self._destroy_location_popup(page, slot_id)
+            await self.browser.save_session(slot_id, account.phone_number)
 
             account.update(logged_in=True, active=True, current_page="🔄 Manually Refreshed", last_error=None)
-            await update.message.reply_text(f"🔄 Hard Refreshed {slot_id}")
+            await update.message.reply_text(f"🔄 Hard Refreshed {slot_id} (Session & Indian Region Active)")
 
             task = self.sniper_tasks.get(slot_id)
             if task is None or task.done():
@@ -720,10 +822,12 @@ class AccountController:
                 active=False,
                 current_page="unknown",
                 last_error=None,
-                wallet_balance=None
+                wallet_balance=None,
             )
             log_step(slot_id, "Logged out and RAM freed.")
-            await update.message.reply_text(f"🚪 Successfully logged out & RAM freed for {slot_id}. Slot is now fresh for a new account!")
+            await update.message.reply_text(
+                f"🚪 Successfully logged out & RAM freed for {slot_id}. Slot is now fresh!"
+            )
         except Exception as exc:
             await update.message.reply_text(f"❌ Logout failed: {exc}")
 
@@ -735,7 +839,7 @@ class AccountController:
 
         try:
             slot_num = int(slot_id.split("-A")[-1])
-            await asyncio.sleep((slot_num - 1) * 4)
+            await asyncio.sleep((slot_num - 1) * 3)
         except Exception:
             pass
 
@@ -770,10 +874,14 @@ class AccountController:
 
                 account.update(current_page="🔄 [STAGE: Hard Refreshing Page]")
                 cache_buster = int(time.time())
-                fresh_url = f"{settings.product_url}?cb={cache_buster}" if "?" not in settings.product_url else f"{settings.product_url}&cb={cache_buster}"
+                fresh_url = (
+                    f"{settings.product_url}?cb={cache_buster}"
+                    if "?" not in settings.product_url
+                    else f"{settings.product_url}&cb={cache_buster}"
+                )
 
                 await page.goto(fresh_url, wait_until="domcontentloaded", timeout=35000)
-                await asyncio.sleep(1.5)
+                await asyncio.sleep(1.2)
                 await self._destroy_location_popup(page, slot_id)
 
                 content = await page.content()
@@ -788,7 +896,9 @@ class AccountController:
                 if await rs_5000_locator.count() > 0:
                     try:
                         await rs_5000_locator.first.click(force=True, timeout=3000)
-                        await rs_5000_locator.first.evaluate("(el) => { if(el.parentElement) el.parentElement.click(); }")
+                        await rs_5000_locator.first.evaluate(
+                            "(el) => { if(el.parentElement) el.parentElement.click(); }"
+                        )
                     except Exception as click_err:
                         account.update(last_error=f"Click Note: {str(click_err)[:40]}")
                 else:
@@ -796,13 +906,15 @@ class AccountController:
                     if await fallback_loc.count() > 0:
                         try:
                             await fallback_loc.last.click(force=True, timeout=3000)
-                            await fallback_loc.last.evaluate("(el) => { if(el.parentElement) el.parentElement.click(); }")
+                            await fallback_loc.last.evaluate(
+                                "(el) => { if(el.parentElement) el.parentElement.click(); }"
+                            )
                         except Exception as click_err:
                             account.update(last_error=f"Fallback Note: {str(click_err)[:40]}")
                     else:
                         account.update(last_error="Rs.5000 option not visible")
 
-                await asyncio.sleep(1.5)
+                await asyncio.sleep(1.2)
                 await self._update_live_balance(page, account)
 
                 account.update(current_page="🔍 [STAGE: Checking for Pay Button]")
@@ -816,7 +928,7 @@ class AccountController:
                 if not is_in_stock:
                     check_t = datetime.now().strftime("%I:%M:%S %p")
                     account.update(current_page=f"😴 [STAGE: Out of Stock] (Checked: {check_t})")
-                    await asyncio.sleep(1.5)
+                    await asyncio.sleep(1.2)
                     continue
 
                 log_step(slot_id, "🚨 STOCK DETECTED! Triggering Swarm Buy Flow!")
@@ -826,21 +938,30 @@ class AccountController:
                     self.stock_event.set()
                     asyncio.create_task(self._clear_stock_event_delayed())
 
-                await self.telegram.send_message(f"🚨 STOCK DETECTED in {slot_id}! Swarm attack initiated across all accounts...")
+                await self.telegram.send_message(
+                    f"🚨 STOCK DETECTED in {slot_id}! Swarm attack initiated across all accounts..."
+                )
 
                 for target_qty in [2, 1]:
                     try:
                         if target_qty == 1:
                             account.update(current_page="🔄 [STAGE: Retrying with Qty 1]")
-                            retry_url = f"{settings.product_url}?retry={int(time.time())}" if "?" not in settings.product_url else f"{settings.product_url}&retry={int(time.time())}"
+                            retry_url = (
+                                f"{settings.product_url}?retry={int(time.time())}"
+                                if "?" not in settings.product_url
+                                else f"{settings.product_url}&retry={int(time.time())}"
+                            )
                             await page.goto(retry_url, wait_until="domcontentloaded", timeout=30000)
-                            await asyncio.sleep(2.0)
+                            await asyncio.sleep(1.5)
+                            await self._destroy_location_popup(page, slot_id)
 
                             rs_5000_loc = page.locator("text=Rs.5000 Wallet Code >> visible=true")
                             if await rs_5000_loc.count() > 0:
                                 await rs_5000_loc.first.click(force=True)
-                                await rs_5000_loc.first.evaluate("(el) => { if(el.parentElement) el.parentElement.click(); }")
-                                await asyncio.sleep(1.5)
+                                await rs_5000_loc.first.evaluate(
+                                    "(el) => { if(el.parentElement) el.parentElement.click(); }"
+                                )
+                                await asyncio.sleep(1.2)
 
                             pay_btn_1 = page.locator("button >> text='Pay via wallet' >> visible=true").first
 
@@ -851,7 +972,7 @@ class AccountController:
                                 await plus_btn.wait_for(state="visible", timeout=3000)
                                 await plus_btn.click(force=True, timeout=2000)
                                 await plus_btn.evaluate("(el) => el.click()")
-                                await asyncio.sleep(1.5)
+                                await asyncio.sleep(1.2)
                             except Exception as e:
                                 account.update(last_error=f"Plus Btn Note: {str(e)[:40]}")
 
@@ -864,7 +985,10 @@ class AccountController:
                             await page.screenshot(path=str(screenshot_path), full_page=False)
                             await self.telegram.send_photo(
                                 photo_path=str(screenshot_path),
-                                caption=(f"🛒 SWARM BUY ATTEMPT (Qty {target_qty})!\n\nSlot: {slot_id}\nBalance Info: {wallet_balance_text}")
+                                caption=(
+                                    f"🛒 SWARM BUY ATTEMPT (Qty {target_qty})!\n\n"
+                                    f"Slot: {slot_id}\nBalance Info: {wallet_balance_text}"
+                                ),
                             )
                             if screenshot_path.exists():
                                 screenshot_path.unlink()
@@ -873,7 +997,9 @@ class AccountController:
 
                         if "insufficient" in wallet_balance_text.lower() or "add money" in wallet_balance_text.lower():
                             account.update(current_page="🛑 [STAGE: Stopped - Insufficient Funds]")
-                            await self.telegram.send_message(f"🚨 INSUFFICIENT BALANCE in {slot_id}. Buy stopped.")
+                            await self.telegram.send_message(
+                                f"🚨 INSUFFICIENT BALANCE in {slot_id}. Buy stopped."
+                            )
                             break
 
                         account.update(current_page="💳 [STAGE: Clicking First Pay Button]")
@@ -882,8 +1008,10 @@ class AccountController:
                         await pay_btn_1.evaluate("(el) => el.click()")
 
                         account.update(current_page="📝 [STAGE: Waiting for Delivery Popup]")
-                        await page.locator("text=Delivery Details >> visible=true").wait_for(state="visible", timeout=6000)
-                        await asyncio.sleep(1.5)
+                        await page.locator("text=Delivery Details >> visible=true").wait_for(
+                            state="visible", timeout=6000
+                        )
+                        await asyncio.sleep(1.2)
 
                         account.update(current_page="💳 [STAGE: Clicking Final Pay Button]")
                         pay_btn_2 = page.locator("button >> text='Pay via wallet' >> visible=true").last
@@ -905,7 +1033,10 @@ class AccountController:
                         error_ss = self.screenshots_dir / f"{slot_id}_error_qty_{target_qty}.png"
                         try:
                             await page.screenshot(path=str(error_ss), full_page=False)
-                            await self.telegram.send_photo(photo_path=str(error_ss), caption=f"⚠️ Failed Qty {target_qty} for {slot_id}")
+                            await self.telegram.send_photo(
+                                photo_path=str(error_ss),
+                                caption=f"⚠️ Failed Qty {target_qty} for {slot_id}",
+                            )
                             if error_ss.exists():
                                 error_ss.unlink()
                         except Exception:
@@ -927,7 +1058,7 @@ class AccountController:
                 log_step(slot_id, f"Sniper loop error: {err_msg[:60]}")
                 account.update(
                     current_page="🛠️ [STAGE: Auto-Healing Tab...]",
-                    last_error=f"Self-Healed: {err_msg[:45]}"
+                    last_error=f"Self-Healed: {err_msg[:45]}",
                 )
                 try:
                     await self.browser.reset_slot_page(slot_id)
