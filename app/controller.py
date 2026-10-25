@@ -4,6 +4,7 @@ import re
 import sys
 import time
 import urllib.parse
+import uuid
 from datetime import datetime
 from pathlib import Path
 from typing import Dict
@@ -122,7 +123,7 @@ class AccountController:
         auto_started = self._ensure_snipers_running()
         extra_msg = f"\n🚀 Auto-resumed {auto_started} saved sessions!" if auto_started > 0 else ""
         await update.message.reply_text(
-            "🤖 Rooter Auto Buyer (Swarm Pro Mode)\n\n"
+            "🤖 Rooter Auto Buyer (Argon Swarm Pro Mode)\n\n"
             f"Total slots: {settings.total_slots}\n"
             f"Current Service ID: {settings.current_service_id}\n"
             f"Accounts/service: {settings.accounts_per_service}\n"
@@ -132,12 +133,12 @@ class AccountController:
 
     async def handle_help(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text(
-            "📖 SWARM PRO COMMANDS LIST\n\n"
+            "📖 ARGON SWARM PRO COMMANDS\n\n"
             "/status - Live status, balance & last check time\n"
+            "/cookie S1-A1 <token> - Instant Token Login (Unique Device Lock)\n"
             "/login S1-A1 9876543210 - Human Login with Phone\n"
             "/otp S1-A1 123456 - Submit OTP\n"
-            "/cookie S1-A1 <token> - Instant Token Login (Auto-Reloads Browser)\n"
-            "/popup S1-A1 - Force click 'No, stay on this site'\n"
+            "/popup S1-A1 - Force dismiss location popup\n"
             "/screen S1-A1 - Live page screenshot\n"
             "/refresh S1-A1 - Hard refresh & start sniper\n"
             "/trigger_buy - Wake up ALL accounts & attack stock NOW\n"
@@ -187,7 +188,7 @@ class AccountController:
         await update.message.reply_text(f"✅ RAM cleaned & {healed} slots refreshed! All snipers running.")
 
     # =========================================================
-    # INSTANT COOKIE / SHORT TOKEN IMPORT (WITH LIVE RELOAD)
+    # INSTANT COOKIE / SHORT TOKEN IMPORT (UNIQUE DEVICE ISOLATION)
     # =========================================================
 
     def _normalize_cookie_for_playwright(self, c: dict) -> dict:
@@ -242,7 +243,7 @@ class AccountController:
                 raw_input = " ".join(context.args[1:]).strip()
 
             account = self.get_account(slot_id)
-            await update.message.reply_text(f"⏳ Injecting session & Indian region cookies into {slot_id}...")
+            await update.message.reply_text(f"⏳ Injecting isolated device session into {slot_id}...")
 
             # Pause existing sniper while resetting context
             old_task = self.sniper_tasks.pop(slot_id, None)
@@ -252,38 +253,62 @@ class AccountController:
             exp = 1893456000
             playwright_cookies = list(self.browser.get_indian_region_cookies())
             user_label = "Token-Auth"
+            extracted_device_id = str(uuid.uuid4())
+            decoded_user_auth_str = ""
 
             # Check if full JSON array or short user_auth token
             if raw_input.startswith("["):
                 parsed_list = json.loads(raw_input)
+                has_client_id = False
                 for item in parsed_list:
                     if isinstance(item, dict) and "name" in item and "value" in item:
+                        if item["name"] == "client_id":
+                            has_client_id = True
                         playwright_cookies.append(self._normalize_cookie_for_playwright(item))
                         if item["name"] == "user_auth":
                             try:
                                 dec = urllib.parse.unquote(item["value"])
-                                uid = json.loads(dec).get("userId")
-                                if uid:
-                                    user_label = f"UID:{uid}"
+                                decoded_user_auth_str = dec
+                                data = json.loads(dec)
+                                if data.get("userId"):
+                                    user_label = f"UID:{data['userId']}"
+                                if data.get("deviceId"):
+                                    extracted_device_id = str(data["deviceId"])
                             except Exception:
                                 pass
+                if not has_client_id:
+                    playwright_cookies.append({
+                        "name": "client_id",
+                        "value": extracted_device_id,
+                        "domain": ".rooter.gg",
+                        "path": "/",
+                        "expires": exp,
+                        "httpOnly": False,
+                        "secure": True,
+                        "sameSite": "Lax",
+                    })
             else:
                 token_value = raw_input.strip().strip('"').strip("'")
-                # Agar user ne decoded JSON diya ho toh URL-encode kar do
                 if token_value.startswith("{"):
+                    decoded_user_auth_str = token_value
                     try:
-                        uid = json.loads(token_value).get("userId")
-                        if uid:
-                            user_label = f"UID:{uid}"
+                        data = json.loads(token_value)
+                        if data.get("userId"):
+                            user_label = f"UID:{data['userId']}"
+                        if data.get("deviceId"):
+                            extracted_device_id = str(data["deviceId"])
                     except Exception:
                         pass
                     token_value = urllib.parse.quote(token_value, safe="")
                 else:
                     try:
                         dec = urllib.parse.unquote(token_value)
-                        uid = json.loads(dec).get("userId")
-                        if uid:
-                            user_label = f"UID:{uid}"
+                        decoded_user_auth_str = dec
+                        data = json.loads(dec)
+                        if data.get("userId"):
+                            user_label = f"UID:{data['userId']}"
+                        if data.get("deviceId"):
+                            extracted_device_id = str(data["deviceId"])
                     except Exception:
                         pass
 
@@ -300,7 +325,7 @@ class AccountController:
                     },
                     {
                         "name": "client_id",
-                        "value": "08c76d30-cf1b-11f1-bb91-a7a0572fd2db",
+                        "value": extracted_device_id,
                         "domain": ".rooter.gg",
                         "path": "/",
                         "expires": exp,
@@ -310,18 +335,36 @@ class AccountController:
                     },
                 ])
 
-            # 1. Purana browser context band karo taaki naya storage_state 100% load ho
+            # 1. Close old browser context for this slot
             await self.browser.close_slot(slot_id)
 
-            # 2. Disk par storage_state.json write karo
+            # 2. Write storage_state.json with cookies & localStorage origins
+            origins_data = [
+                {
+                    "origin": "https://shop.rooter.gg",
+                    "localStorage": [
+                        {"name": "COUNTRY", "value": "IN"},
+                        {"name": "COUNTRY_LOCALE", "value": "en-IN"},
+                        {"name": "LANGUAGE", "value": "en"},
+                        {"name": "client_id", "value": extracted_device_id},
+                        {"name": "deviceId", "value": extracted_device_id},
+                    ],
+                }
+            ]
+            if decoded_user_auth_str:
+                origins_data[0]["localStorage"].append(
+                    {"name": "user_auth", "value": decoded_user_auth_str}
+                )
+
             session_dir = self.browser.sessions.session_path(slot_id)
             session_dir.mkdir(parents=True, exist_ok=True)
             storage_file = session_dir / "storage_state.json"
-            storage_file.write_text(json.dumps({"cookies": playwright_cookies, "origins": []}))
+            storage_file.write_text(json.dumps({"cookies": playwright_cookies, "origins": origins_data}))
 
-            # 3. Naya context open karke product page load karo aur session save karo
+            # 3. Open fresh context & product page, verify balance & save state
             page = await self.browser.open_product_page(slot_id)
             await self._destroy_location_popup(page, slot_id)
+            await asyncio.sleep(1.0)
             balance_txt = await self._update_live_balance(page, account)
             await self.browser.save_session(slot_id, user_label)
 
@@ -332,13 +375,14 @@ class AccountController:
                 current_page="✅ Token Active & Verified",
                 last_error=None,
             )
-            log_step(slot_id, f"Cookie session live-loaded ({user_label}) | {balance_txt}")
+            log_step(slot_id, f"Cookie session live-loaded ({user_label} | DevID: {extracted_device_id[:8]}) | {balance_txt}")
 
             # 4. Auto-start Sniper
             self.sniper_tasks[slot_id] = asyncio.create_task(self._sniper_worker(slot_id))
 
             await update.message.reply_text(
                 f"✅ Success! {slot_id} Live Logged-In ({user_label})!\n"
+                f"📱 Isolated Device ID: `{extracted_device_id[:12]}...`\n"
                 f"💰 Wallet: {balance_txt}\n"
                 f"🔫 Swarm Sniper Auto-Started! Ab `/screen {slot_id}` bhej kar dekh le!"
             )
@@ -372,10 +416,32 @@ class AccountController:
 
     async def _destroy_location_popup(self, page, slot_id: str = "SLOT"):
         """
-        Real Human Click + Indian Cookie Lock taaki popup click hokar hamesha ke liye band ho.
+        1. Real Human Click via BrowserManager.
+        2. Fallback DOM Vaporizer if modal still lingers.
+        3. Auto-return to PlayStation product page if redirected.
         """
         try:
             await self.browser.handle_location_popup(page, slot_id)
+        except Exception:
+            pass
+
+        # Fallback: If 'Different Location Detected' still visible, click 'No, stay' or remove modal
+        try:
+            await page.evaluate("""() => {
+                const allEls = Array.from(document.querySelectorAll('button, p, span, div, a'));
+                for (const el of allEls) {
+                    const txt = (el.innerText || el.textContent || '').trim().toLowerCase();
+                    if (txt === 'no, stay on this site' || txt === 'stay on this site') {
+                        el.click();
+                    }
+                }
+                for (const div of document.querySelectorAll('div, section')) {
+                    if (div.innerText && div.innerText.includes('Different Location Detected')) {
+                        const modal = div.closest('div[role="dialog"]') || div.closest('.fixed');
+                        if (modal) modal.remove();
+                    }
+                }
+            }""")
         except Exception:
             pass
 
@@ -414,6 +480,7 @@ class AccountController:
             'input[placeholder*="mobile" i]',
             'input[placeholder*="number" i]',
             'input[placeholder*="phone" i]',
+            'input[placeholder*="enter" i]',
         ]
         for selector in selectors:
             try:
@@ -426,7 +493,7 @@ class AccountController:
                         if box and box["y"] < 85:
                             continue
                         ph = (await item.get_attribute("placeholder") or "").lower()
-                        if "search" in ph or "bgmi" in ph or "valorant" in ph:
+                        if "search" in ph or "bgmi" in ph or "valorant" in ph or "coupon" in ph:
                             continue
                         return item
             except Exception:
@@ -435,19 +502,20 @@ class AccountController:
 
     async def _open_login_popup(self, page, slot_id: str = "SLOT"):
         await self._destroy_location_popup(page, slot_id)
-        await asyncio.sleep(0.6)
+        await asyncio.sleep(0.8)
 
         mobile_input = await self._find_mobile_input(page)
         if mobile_input is not None:
             return mobile_input
 
+        # Step 1: Click exact rightmost SVG icon in the top navbar (Profile Icon)
         try:
             icon_info = await page.evaluate("""() => {
-                const svgs = Array.from(document.querySelectorAll('svg, button, a'));
+                const svgs = Array.from(document.querySelectorAll('svg'));
                 const topRight = [];
-                for (const el of svgs) {
-                    const r = el.getBoundingClientRect();
-                    if (r.top >= 5 && r.top <= 80 && r.left > 900 && r.width >= 12 && r.width <= 70) {
+                for (const svg of svgs) {
+                    const r = svg.getBoundingClientRect();
+                    if (r.top >= 5 && r.top <= 75 && r.left > 800 && r.width >= 14 && r.width <= 60) {
                         topRight.push({
                             x: r.left + r.width / 2,
                             y: r.top + r.height / 2,
@@ -462,17 +530,39 @@ class AccountController:
 
             if icon_info and "x" in icon_info and "y" in icon_info:
                 px, py = icon_info["x"], icon_info["y"]
+                log_step(slot_id, f"Clicking top-right profile icon at ({px:.0f}, {py:.0f})")
                 await page.mouse.move(px, py, steps=6)
                 await page.mouse.click(px, py)
-                await asyncio.sleep(1.8)
+                await asyncio.sleep(2.0)
+
                 mobile_input = await self._find_mobile_input(page)
                 if mobile_input is not None:
                     return mobile_input
-        except Exception:
-            pass
+        except Exception as e:
+            log_step(slot_id, f"SVG icon click note: {e}")
 
-        # Fallback coordinates for 1280x720 top-right profile icon
-        for coord_x in [1208, 1145, 1225]:
+        # Step 2: Check if clicking profile icon opened a dropdown/menu with "Login" button
+        login_texts = [
+            page.get_by_text("Login / Sign Up", exact=False),
+            page.get_by_text("Login / Signup", exact=False),
+            page.get_by_text("Sign In", exact=False),
+            page.locator("button:has-text('Login')"),
+            page.locator("a:has-text('Login')"),
+            page.get_by_text("Login", exact=True),
+        ]
+        for candidate in login_texts:
+            try:
+                if await candidate.count() > 0 and await candidate.first.is_visible(timeout=400):
+                    await candidate.first.click(force=True, timeout=2000)
+                    await asyncio.sleep(1.8)
+                    mobile_input = await self._find_mobile_input(page)
+                    if mobile_input is not None:
+                        return mobile_input
+            except Exception:
+                pass
+
+        # Step 3: Fallback coordinates for top-right profile icon (both 1280 and 1200 widths)
+        for coord_x in [1208, 1143, 1225]:
             try:
                 await page.mouse.move(coord_x, 36, steps=5)
                 await page.mouse.click(coord_x, 36)
@@ -483,17 +573,18 @@ class AccountController:
             except Exception:
                 pass
 
-        candidates = [
-            page.get_by_text("Login / Sign Up", exact=False),
-            page.get_by_text("Login", exact=True),
+        # Step 4: Click "Apply Coupons" or "Login to" on page which also triggers login modal
+        extra_triggers = [
+            page.locator("button:has-text('Login to')"),
+            page.get_by_text("Apply Coupons", exact=False),
         ]
-        for candidate in candidates:
+        for trig in extra_triggers:
             try:
-                if await candidate.count() > 0 and await candidate.first.is_visible(timeout=300):
-                    await candidate.first.click(force=True, timeout=2000)
-                    await asyncio.sleep(1.5)
+                if await trig.count() > 0 and await trig.first.is_visible(timeout=300):
+                    await trig.first.click(force=True, timeout=1500)
+                    await asyncio.sleep(1.8)
                     mobile_input = await self._find_mobile_input(page)
-                    if mobile_input:
+                    if mobile_input is not None:
                         return mobile_input
             except Exception:
                 pass
