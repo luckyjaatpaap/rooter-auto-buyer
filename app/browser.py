@@ -348,11 +348,24 @@ class BrowserManager:
             await page.context.add_cookies(self.get_indian_region_cookies())
         except Exception:
             pass
-        await page.goto(
-            settings.product_url,
-            wait_until="domcontentloaded",
-            timeout=45000,
-        )
+        
+        # Safe SPA Routing: Load homepage first to establish secure Next.js session and bypass IP block
+        try:
+            await page.goto("https://shop.rooter.gg/", wait_until="domcontentloaded", timeout=30000)
+            await asyncio.sleep(1.0)
+            await self.handle_location_popup(page, slot_id)
+            
+            # Click on PlayStation product card via client-side routing if available
+            target_slug = settings.product_url.split("?")[0].rstrip("/").split("/")[-1]
+            card_link = page.locator(f"a[href*='{target_slug}']").first
+            if await card_link.count() > 0 and await card_link.is_visible(timeout=3000):
+                await card_link.click(force=True, timeout=4000)
+                await asyncio.sleep(2.0)
+            else:
+                await page.goto(settings.product_url, wait_until="domcontentloaded", timeout=45000)
+        except Exception:
+            await page.goto(settings.product_url, wait_until="domcontentloaded", timeout=45000)
+
         await self.handle_location_popup(page, slot_id)
         await page.wait_for_timeout(1000)
         try:
