@@ -15,8 +15,8 @@ from .sessions import SessionManager
 
 class BrowserManager:
 
-    WINDOW_WIDTH = 1280
-    WINDOW_HEIGHT = 720
+    WINDOW_WIDTH = 1366
+    WINDOW_HEIGHT = 768
 
     USER_AGENT = (
         "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
@@ -26,7 +26,7 @@ class BrowserManager:
 
     def __init__(self):
         self.playwright: Playwright | None = None
-        self.browser: Browser | None = None
+        self.browser: Optional[Browser] = None
         self.contexts: Dict[str, BrowserContext] = {}
         self.slot_locks: Dict[str, asyncio.Lock] = {}
         self.sessions = SessionManager()
@@ -46,8 +46,14 @@ class BrowserManager:
                 headless=True,
                 args=[
                     "--no-sandbox",
+                    "--disable-setuid-sandbox",
                     "--disable-dev-shm-usage",
+                    "--disable-accelerated-2d-canvas",
                     "--disable-gpu",
+                    "--disable-infobars",
+                    "--window-position=0,0",
+                    "--ignore-certificate-errors",
+                    "--ignore-certificate-errors-spki-list",
                     "--disable-blink-features=AutomationControlled",
                     f"--window-size={self.WINDOW_WIDTH},{self.WINDOW_HEIGHT}",
                     "--force-device-scale-factor=1",
@@ -60,7 +66,6 @@ class BrowserManager:
                     "--mute-audio",
                     "--no-first-run",
                     "--lang=en-IN,en",
-                    "--js-flags=--max-old-space-size=512",
                 ],
             )
 
@@ -98,12 +103,19 @@ class BrowserManager:
             "geolocation": {"latitude": 28.6139, "longitude": 77.2090},
             "permissions": ["geolocation"],
             "extra_http_headers": {
+                "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8",
                 "Accept-Language": "en-IN,en;q=0.9,hi;q=0.8",
-                "sec-ch-ua": '"Chromium";v="130", "Google Chrome";v="130", "Not?A_Brand";v="99"',
-                "sec-ch-ua-mobile": "?0",
-                "sec-ch-ua-platform": '"Windows"',
+                "Accept-Encoding": "gzip, deflate, br",
+                "Sec-Ch-Ua": '"Chromium";v="130", "Google Chrome";v="130", "Not?A_Brand";v="99"',
+                "Sec-Ch-Ua-Mobile": "?0",
+                "Sec-Ch-Ua-Platform": '"Windows"',
+                "Sec-Fetch-Dest": "document",
+                "Sec-Fetch-Mode": "navigate",
+                "Sec-Fetch-Site": "none",
+                "Sec-Fetch-User": "?1",
+                "Upgrade-Insecure-Requests": "1",
                 "CF-IPCountry": "IN",
-                "X-Country-Code": "IN",
+                "X-Forwarded-For": "103.251.144.1",
             },
         }
 
@@ -169,9 +181,21 @@ class BrowserManager:
             pass
 
         await context.add_init_script("""
+            // Hide webdriver and automation flags completely
             Object.defineProperty(navigator, 'webdriver', { get: () => undefined });
             Object.defineProperty(navigator, 'languages', { get: () => ['en-IN', 'en', 'hi'] });
-            window.chrome = { runtime: {} };
+            Object.defineProperty(navigator, 'plugins', { get: () => [1, 2, 3, 4, 5] });
+            
+            window.chrome = {
+                runtime: {}
+            };
+
+            const originalQuery = window.navigator.permissions.query;
+            window.navigator.permissions.query = (parameters) => (
+                parameters.name === 'notifications' ?
+                    Promise.resolve({ state: Notification.permission }) :
+                    originalQuery(parameters)
+            );
 
             try {
                 localStorage.setItem('COUNTRY', 'IN');
@@ -206,13 +230,6 @@ class BrowserManager:
             };
 
             setInterval(clickStayOnSite, 350);
-            document.addEventListener('DOMContentLoaded', () => {
-                clickStayOnSite();
-                if (document.body) {
-                    const obs = new MutationObserver(clickStayOnSite);
-                    obs.observe(document.body, { childList: true, subtree: true });
-                }
-            });
         """)
 
     async def get_context(self, slot_id: str) -> BrowserContext:
@@ -248,21 +265,9 @@ class BrowserManager:
         self.contexts[slot_id] = context
         return context
 
-    async def _attach_playwright_popup_handler(self, page: Page):
-        try:
-            stay_locator = page.get_by_text("No, stay on this site", exact=False)
-            await page.add_locator_handler(
-                stay_locator,
-                lambda loc: loc.first.click(force=True, timeout=1500),
-                no_wait_after=True,
-            )
-        except Exception:
-            pass
-
     async def get_page(self, slot_id: str) -> Page:
         slot_id = slot_id.upper()
         context = await self.get_context(slot_id)
-
         try:
             valid_pages = [p for p in context.pages if not p.is_closed()]
             if valid_pages:
@@ -274,14 +279,11 @@ class BrowserManager:
                 return valid_pages[0]
 
             page = await context.new_page()
-            await self._attach_playwright_popup_handler(page)
             return page
         except Exception:
             self.contexts.pop(slot_id, None)
             context = await self.get_context(slot_id)
-            page = await context.new_page()
-            await self._attach_playwright_popup_handler(page)
-            return page
+            return await context.new_page()
 
     async def reset_slot_page(self, slot_id: str) -> Page:
         slot_id = slot_id.upper()
@@ -296,7 +298,6 @@ class BrowserManager:
     async def handle_location_popup(self, page: Page, slot_id: str = "SLOT") -> bool:
         try:
             await page.wait_for_timeout(300)
-
             for _ in range(3):
                 box = await page.evaluate("""() => {
                     const allEls = Array.from(document.querySelectorAll('button, p, span, div, a'));
@@ -329,43 +330,28 @@ class BrowserManager:
                     await page.mouse.click(box["x"], box["y"])
                     await page.wait_for_timeout(500)
                     return True
-
-                loc = page.get_by_text("No, stay on this site", exact=False)
-                if await loc.count() > 0 and await loc.last.is_visible(timeout=400):
-                    await loc.last.click(force=True, timeout=1500)
-                    await page.wait_for_timeout(500)
-                    return True
-
                 await page.wait_for_timeout(250)
-
             return False
         except Exception:
             return False
 
     async def open_product_page(self, slot_id: str) -> Page:
         page = await self.get_page(slot_id)
+        
+        # Open homepage first to set valid session cookies and bypass datacenter security check
         try:
-            await page.context.add_cookies(self.get_indian_region_cookies())
+            await page.goto("https://shop.rooter.gg/", wait_until="domcontentloaded", timeout=35000)
+            await asyncio.sleep(1.5)
+            await self.handle_location_popup(page, slot_id)
         except Exception:
             pass
-        
-        # Safe SPA Routing: Load homepage first to establish secure Next.js session and bypass IP block
-        try:
-            await page.goto("https://shop.rooter.gg/", wait_until="domcontentloaded", timeout=30000)
-            await asyncio.sleep(1.0)
-            await self.handle_location_popup(page, slot_id)
-            
-            # Click on PlayStation product card via client-side routing if available
-            target_slug = settings.product_url.split("?")[0].rstrip("/").split("/")[-1]
-            card_link = page.locator(f"a[href*='{target_slug}']").first
-            if await card_link.count() > 0 and await card_link.is_visible(timeout=3000):
-                await card_link.click(force=True, timeout=4000)
-                await asyncio.sleep(2.0)
-            else:
-                await page.goto(settings.product_url, wait_until="domcontentloaded", timeout=45000)
-        except Exception:
-            await page.goto(settings.product_url, wait_until="domcontentloaded", timeout=45000)
 
+        # Now navigate to product page safely
+        await page.goto(
+            settings.product_url,
+            wait_until="domcontentloaded",
+            timeout=45000,
+        )
         await self.handle_location_popup(page, slot_id)
         await page.wait_for_timeout(1000)
         try:
