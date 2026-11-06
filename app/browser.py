@@ -1,3 +1,4 @@
+import asyncio
 import json
 from typing import Dict
 from playwright.async_api import (
@@ -17,7 +18,6 @@ class BrowserManager:
     WINDOW_WIDTH = 1280
     WINDOW_HEIGHT = 720
 
-    # Real Human Windows Chrome User-Agent
     USER_AGENT = (
         "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
         "AppleWebKit/537.36 (KHTML, like Gecko) "
@@ -28,7 +28,14 @@ class BrowserManager:
         self.playwright: Playwright | None = None
         self.browser: Browser | None = None
         self.contexts: Dict[str, BrowserContext] = {}
+        self.slot_locks: Dict[str, asyncio.Lock] = {}
         self.sessions = SessionManager()
+
+    def get_slot_lock(self, slot_id: str) -> asyncio.Lock:
+        slot_id = slot_id.upper()
+        if slot_id not in self.slot_locks:
+            self.slot_locks[slot_id] = asyncio.Lock()
+        return self.slot_locks[slot_id]
 
     async def start(self):
         if self.playwright is None:
@@ -58,7 +65,6 @@ class BrowserManager:
             )
 
     async def ensure_browser_alive(self):
-        """Agar Chromium crash ya close ho jaye, toh turant naya browser start karega."""
         try:
             if self.browser is None or not self.browser.is_connected():
                 self.contexts.clear()
@@ -96,12 +102,13 @@ class BrowserManager:
                 "sec-ch-ua": '"Chromium";v="130", "Google Chrome";v="130", "Not?A_Brand";v="99"',
                 "sec-ch-ua-mobile": "?0",
                 "sec-ch-ua-platform": '"Windows"',
+                "CF-IPCountry": "IN",
+                "X-Country-Code": "IN",
             },
         }
 
     def get_indian_region_cookies(self):
-        """Rooter ko 100% Indian region batane wali cookies taaki popup paida hi na ho."""
-        exp = 1893456000  # Year 2030
+        exp = 1893456000
         return [
             {
                 "name": "COUNTRY",
@@ -156,30 +163,22 @@ class BrowserManager:
         ]
 
     async def _apply_stealth_and_auto_popup_killer(self, context: BrowserContext):
-        """
-        1. Indian region cookies pre-inject karta hai.
-        2. Anti-bot stealth (navigator.webdriver = false) lagata hai.
-        3. Har 300ms par چلने wala auto-clicker lagata hai jo 'No, stay on this site' ko aate hi real human click se daba deta hai.
-        """
         try:
             await context.add_cookies(self.get_indian_region_cookies())
         except Exception:
             pass
 
         await context.add_init_script("""
-            // 1. Stealth Anti-Bot Evasion
             Object.defineProperty(navigator, 'webdriver', { get: () => undefined });
             Object.defineProperty(navigator, 'languages', { get: () => ['en-IN', 'en', 'hi'] });
             window.chrome = { runtime: {} };
 
-            // 2. LocalStorage Indian Region Pre-set
             try {
                 localStorage.setItem('COUNTRY', 'IN');
                 localStorage.setItem('COUNTRY_LOCALE', 'en-IN');
                 localStorage.setItem('LANGUAGE', 'en');
             } catch (e) {}
 
-            // 3. Real Human Auto-Clicker for 'No, stay on this site'
             const clickStayOnSite = () => {
                 try {
                     const allEls = document.querySelectorAll('button, p, span, div, a');
@@ -217,6 +216,7 @@ class BrowserManager:
         """)
 
     async def get_context(self, slot_id: str) -> BrowserContext:
+        slot_id = slot_id.upper()
         await self.ensure_browser_alive()
 
         if slot_id in self.contexts:
@@ -249,7 +249,6 @@ class BrowserManager:
         return context
 
     async def _attach_playwright_popup_handler(self, page: Page):
-        """Playwright native locator handler + pagina-level popup killer."""
         try:
             stay_locator = page.get_by_text("No, stay on this site", exact=False)
             await page.add_locator_handler(
@@ -261,6 +260,7 @@ class BrowserManager:
             pass
 
     async def get_page(self, slot_id: str) -> Page:
+        slot_id = slot_id.upper()
         context = await self.get_context(slot_id)
 
         try:
@@ -284,7 +284,7 @@ class BrowserManager:
             return page
 
     async def reset_slot_page(self, slot_id: str) -> Page:
-        """Context ko safely close karke fresh storage_state se naya context & tab banata hai."""
+        slot_id = slot_id.upper()
         try:
             ctx = self.contexts.pop(slot_id, None)
             if ctx:
@@ -293,20 +293,11 @@ class BrowserManager:
             pass
         return await self.get_page(slot_id)
 
-    # =========================================================
-    # ROOTER LOCATION POPUP HANDLER
-    # =========================================================
-
     async def handle_location_popup(self, page: Page, slot_id: str = "SLOT") -> bool:
-        """
-        1. Exact 'No, stay on this site' leaf element dhoondh kar real mouse click karta hai.
-        2. Playwright bounding_box nikal kar exact center par physical mouse click karta hai.
-        """
         try:
             await page.wait_for_timeout(300)
 
             for _ in range(3):
-                # Method 1: Find leaf element with exact text and click its bounding box center
                 box = await page.evaluate("""() => {
                     const allEls = Array.from(document.querySelectorAll('button, p, span, div, a'));
                     let target = null;
@@ -314,7 +305,6 @@ class BrowserManager:
                         const txt = (el.innerText || el.textContent || '').trim().toLowerCase();
                         if (txt === 'no, stay on this site' || txt === 'stay on this site') {
                             target = el;
-                            // Prefer the innermost element
                             if (el.children.length === 0) break;
                         }
                     }
@@ -340,7 +330,6 @@ class BrowserManager:
                     await page.wait_for_timeout(500)
                     return True
 
-                # Method 2: Playwright Locator fallback
                 loc = page.get_by_text("No, stay on this site", exact=False)
                 if await loc.count() > 0 and await loc.last.is_visible(timeout=400):
                     await loc.last.click(force=True, timeout=1500)
@@ -353,12 +342,12 @@ class BrowserManager:
         except Exception:
             return False
 
-    # =========================================================
-    # OPEN & ENSURE PLAYSTATION PRODUCT
-    # =========================================================
-
     async def open_product_page(self, slot_id: str) -> Page:
         page = await self.get_page(slot_id)
+        try:
+            await page.context.add_cookies(self.get_indian_region_cookies())
+        except Exception:
+            pass
         await page.goto(
             settings.product_url,
             wait_until="domcontentloaded",
@@ -392,11 +381,8 @@ class BrowserManager:
 
         return page
 
-    # =========================================================
-    # SAVE SESSION + PHONE METADATA
-    # =========================================================
-
     async def save_session(self, slot_id: str, phone_number: str | None = None):
+        slot_id = slot_id.upper()
         context = self.contexts.get(slot_id)
         if context is None:
             return
@@ -417,7 +403,7 @@ class BrowserManager:
 
     def load_saved_phone(self, slot_id: str) -> str | None:
         try:
-            session_dir = self.sessions.session_path(slot_id)
+            session_dir = self.sessions.session_path(slot_id.upper())
             meta_file = session_dir / "meta.json"
             if meta_file.exists():
                 data = json.loads(meta_file.read_text())
@@ -427,7 +413,7 @@ class BrowserManager:
         return None
 
     async def close_slot(self, slot_id: str):
-        context = self.contexts.pop(slot_id, None)
+        context = self.contexts.pop(slot_id.upper(), None)
         if context is None:
             return
         try:
