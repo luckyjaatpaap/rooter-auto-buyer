@@ -779,16 +779,19 @@ class AccountController:
             if not otp_inputs:
                 raise RuntimeError("OTP fields page par nahi mile.")
 
+            # 1. Properly click & type OTP so React state updates naturally
             if len(otp_inputs) == 1:
-                await otp_inputs[0].focus()
-                await page.keyboard.type(otp, delay=60)
+                await otp_inputs[0].click(force=True)
+                await asyncio.sleep(0.2)
+                await otp_inputs[0].fill("")
+                await page.keyboard.type(otp, delay=65)
             else:
                 boxes = otp_inputs[: len(otp)]
                 for i, digit in enumerate(otp):
                     if i < len(boxes):
-                        await boxes[i].focus()
+                        await boxes[i].click(force=True)
                         await page.keyboard.press(digit)
-                        await asyncio.sleep(0.06)
+                        await asyncio.sleep(0.08)
 
             await asyncio.sleep(0.8)
 
@@ -800,14 +803,60 @@ class AccountController:
                 "(el) => { el.removeAttribute('disabled'); el.removeAttribute('data-disabled'); el.disabled = false; }"
             )
             await verify_button.click(force=True, timeout=3000)
-            await asyncio.sleep(3.5)
 
-            page = await self.browser.ensure_product_page(slot_id)
+            # 2. Wait up to 8s and verify that Rooter actually created user_auth session
+            auth_verified = False
+            ctx = await self.browser.get_context(slot_id)
+            for _ in range(16):
+                await asyncio.sleep(0.5)
+                cookies = await ctx.cookies()
+                cookie_auth = next((c["value"] for c in cookies if c.get("name") == "user_auth" and c.get("value")), None)
+                ls_auth = await page.evaluate("""() => {
+                    try { return localStorage.getItem('user_auth'); } catch(e) { return null; }
+                }""")
+
+                if cookie_auth or ls_auth:
+                    # Sync localStorage <-> Cookie so hard refresh never drops login
+                    if ls_auth and not cookie_auth:
+                        await ctx.add_cookies([{
+                            "name": "user_auth",
+                            "value": urllib.parse.quote(ls_auth, safe="") if ls_auth.startswith("{") else ls_auth,
+                            "domain": ".rooter.gg",
+                            "path": "/",
+                            "expires": 1893456000,
+                            "httpOnly": False,
+                            "secure": True,
+                            "sameSite": "Lax",
+                        }])
+                    elif cookie_auth and not ls_auth:
+                        dec_val = urllib.parse.unquote(cookie_auth)
+                        await page.evaluate("(val) => { try { localStorage.setItem('user_auth', val); } catch(e) {} }", dec_val)
+                    auth_verified = True
+                    break
+
+            if not auth_verified:
+                err_ss = self.screenshots_dir / f"{slot_id}_otp_verify_err.png"
+                await page.screenshot(path=str(err_ss), full_page=False)
+                await self.telegram.send_photo(
+                    photo_path=str(err_ss),
+                    caption=f"❌ {slot_id}: OTP click ke baad bhi Rooter ne login session nahi banaya (Check screenshot).",
+                )
+                if err_ss.exists():
+                    err_ss.unlink()
+                raise RuntimeError("Rooter auth token (user_auth) generate nahi hua. Dobara /login try kar.")
+
+            # 3. Hard reload product page so navbar profile icon & wallet state hydrate cleanly
+            await page.goto(settings.product_url, wait_until="domcontentloaded", timeout=35000)
+            await asyncio.sleep(1.5)
             await self._destroy_location_popup(page, slot_id)
+            balance_txt = await self._update_live_balance(page, account)
             await self.browser.save_session(slot_id, account.phone_number)
+
             account.update(logged_in=True, active=True, current_page="✅ Logged In & Saved", last_error=None)
-            log_step(slot_id, "Login successful & session saved!")
-            await update.message.reply_text(f"✅ Login successful & Session Saved for {slot_id}!")
+            log_step(slot_id, f"Login successful & verified! ({balance_txt})")
+            await update.message.reply_text(
+                f"✅ Login successful & Session Verified for {slot_id}!\n💰 {balance_txt}"
+            )
 
             task = self.sniper_tasks.get(slot_id)
             if task is None or task.done():
@@ -817,10 +866,11 @@ class AccountController:
         except Exception as exc:
             log_step(slot_id, f"OTP failed: {exc}")
             try:
-                account.update(last_error=str(exc))
+                account.update(logged_in=False, last_error=str(exc))
             except Exception:
                 pass
             await update.message.reply_text(f"❌ OTP failed: {exc}")
+
 
     async def handle_screen(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         try:
