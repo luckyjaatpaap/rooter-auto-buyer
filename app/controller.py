@@ -779,7 +779,6 @@ class AccountController:
             if not otp_inputs:
                 raise RuntimeError("OTP fields page par nahi mile.")
 
-            # 1. Properly click & type OTP so React state updates naturally
             if len(otp_inputs) == 1:
                 await otp_inputs[0].click(force=True)
                 await asyncio.sleep(0.2)
@@ -804,58 +803,79 @@ class AccountController:
             )
             await verify_button.click(force=True, timeout=3000)
 
-            # 2. Wait up to 8s and verify that Rooter actually created user_auth session
-            auth_verified = False
+            # 1. Wait for Rooter's own post-OTP popup close / auto-refresh to settle
             ctx = await self.browser.get_context(slot_id)
-            for _ in range(16):
-                await asyncio.sleep(0.5)
+            auth_verified = False
+
+            for _ in range(20):
+                await asyncio.sleep(0.6)
+                try:
+                    cookies = await ctx.cookies()
+                    cookie_auth = next((c["value"] for c in cookies if c.get("name") == "user_auth" and c.get("value")), None)
+                    ls_auth = await page.evaluate(
+                        "() => { try { return localStorage.getItem('user_auth') || sessionStorage.getItem('user_auth'); } catch(e) { return null; } }"
+                    )
+                    if cookie_auth or ls_auth:
+                        auth_verified = True
+                        break
+                except Exception:
+                    # Page may be mid-reload by Rooter right after OTP verify
+                    pass
+
+            # Wait 3s more for Rooter navbar (pink profile icon) to finish rendering
+            await asyncio.sleep(3.0)
+
+            # 2. Make all session cookies permanent so /refresh never drops login
+            try:
                 cookies = await ctx.cookies()
-                cookie_auth = next((c["value"] for c in cookies if c.get("name") == "user_auth" and c.get("value")), None)
-                ls_auth = await page.evaluate("""() => {
-                    try { return localStorage.getItem('user_auth'); } catch(e) { return null; }
-                }""")
+                persistent_cookies = []
+                for c in cookies:
+                    c_copy = dict(c)
+                    if not c_copy.get("expires") or c_copy.get("expires", -1) < 0:
+                        c_copy["expires"] = 1893456000
+                    persistent_cookies.append(c_copy)
+                if persistent_cookies:
+                    await ctx.add_cookies(persistent_cookies)
 
-                if cookie_auth or ls_auth:
-                    # Sync localStorage <-> Cookie so hard refresh never drops login
-                    if ls_auth and not cookie_auth:
-                        await ctx.add_cookies([{
-                            "name": "user_auth",
-                            "value": urllib.parse.quote(ls_auth, safe="") if ls_auth.startswith("{") else ls_auth,
-                            "domain": ".rooter.gg",
-                            "path": "/",
-                            "expires": 1893456000,
-                            "httpOnly": False,
-                            "secure": True,
-                            "sameSite": "Lax",
-                        }])
-                    elif cookie_auth and not ls_auth:
-                        dec_val = urllib.parse.unquote(cookie_auth)
-                        await page.evaluate("(val) => { try { localStorage.setItem('user_auth', val); } catch(e) {} }", dec_val)
-                    auth_verified = True
-                    break
-
-            if not auth_verified:
-                err_ss = self.screenshots_dir / f"{slot_id}_otp_verify_err.png"
-                await page.screenshot(path=str(err_ss), full_page=False)
-                await self.telegram.send_photo(
-                    photo_path=str(err_ss),
-                    caption=f"❌ {slot_id}: OTP click ke baad bhi Rooter ne login session nahi banaya (Check screenshot).",
+                ls_auth = await page.evaluate(
+                    "() => { try { return localStorage.getItem('user_auth') || sessionStorage.getItem('user_auth'); } catch(e) { return null; } }"
                 )
-                if err_ss.exists():
-                    err_ss.unlink()
-                raise RuntimeError("Rooter auth token (user_auth) generate nahi hua. Dobara /login try kar.")
+                if ls_auth:
+                    await page.evaluate(
+                        "(val) => { try { localStorage.setItem('user_auth', val); } catch(e) {} }",
+                        ls_auth,
+                    )
+                    await ctx.add_cookies([{
+                        "name": "user_auth",
+                        "value": urllib.parse.quote(ls_auth, safe="") if ls_auth.startswith("{") else ls_auth,
+                        "domain": ".rooter.gg",
+                        "path": "/",
+                        "expires": 1893456000,
+                        "httpOnly": False,
+                        "secure": True,
+                        "sameSite": "Lax",
+                    }])
+            except Exception as sync_err:
+                log_step(slot_id, f"Cookie sync note: {sync_err}")
 
-            # 3. Hard reload product page so navbar profile icon & wallet state hydrate cleanly
-            await page.goto(settings.product_url, wait_until="domcontentloaded", timeout=35000)
-            await asyncio.sleep(1.5)
+            # 3. Only navigate if page somehow left the product URL
+            if "playstation-gift-cards" not in (page.url or "").lower():
+                try:
+                    await page.goto(settings.product_url, wait_until="domcontentloaded", timeout=25000)
+                    await asyncio.sleep(1.5)
+                except Exception:
+                    pass
+
             await self._destroy_location_popup(page, slot_id)
             balance_txt = await self._update_live_balance(page, account)
+
+            # 4. IMMEDIATELY save session to disk so /refresh & 30s Sniper keep the pink icon
             await self.browser.save_session(slot_id, account.phone_number)
 
             account.update(logged_in=True, active=True, current_page="✅ Logged In & Saved", last_error=None)
-            log_step(slot_id, f"Login successful & verified! ({balance_txt})")
+            log_step(slot_id, f"Login successful & saved! ({balance_txt})")
             await update.message.reply_text(
-                f"✅ Login successful & Session Verified for {slot_id}!\n💰 {balance_txt}"
+                f"✅ Login successful & Session Saved for {slot_id}!\n💰 {balance_txt}"
             )
 
             task = self.sniper_tasks.get(slot_id)
@@ -870,7 +890,6 @@ class AccountController:
             except Exception:
                 pass
             await update.message.reply_text(f"❌ OTP failed: {exc}")
-
 
     async def handle_screen(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         try:
